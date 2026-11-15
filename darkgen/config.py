@@ -19,7 +19,8 @@ class EnvSettings(BaseSettings):
     host: str = "127.0.0.1"
     port: int = 8000
     dashboard_token: str = ""
-    tts_provider: str = "edge"  # edge | silent
+    tts_provider: str = "edge"  # padrão quando não há ElevenLabs: edge | silent (silent = testes)
+    elevenlabs_api_key: str = ""
     public_base_url: str = ""  # ex.: https://meu-servidor.com (callback OAuth e links do MCP)
     # Uploads por dia por projeto do Google Cloud (a cota é por projeto, não por canal).
     youtube_uploads_per_project_per_day: int = 6
@@ -104,6 +105,22 @@ DEFAULT_CHANNEL_SETTINGS: dict = {
     "series_every_days": 7,  # intervalo entre o início de séries automáticas
     "series_kind": "short",  # short | long
     "series_playlists": True,  # cria uma playlist por série no YouTube (requer reconectar o canal)
+    "series_format": "narrated",  # narrated (narrador) | novela (personagens, diálogos, várias vozes)
+    "min_duration_s": 0,  # duração mínima do vídeo (61 = elegível ao Creator Rewards do TikTok)
+    # Publicação: manual = fila "Pronto para postar" com o kit de cada rede; youtube_api = upload automático
+    "publish_mode": "manual",
+    "platforms": ["tiktok", "kwai", "instagram", "youtube"],
+    # Voz: auto = ElevenLabs se houver ELEVENLABS_API_KEY, senão edge-tts
+    "tts_provider": "auto",
+    "eleven_model": "eleven_multilingual_v2",
+    "eleven_narrator_voice": "JBFqnCBsd6RMkjVDRZzb",
+    "eleven_male_voices": ["pNInz6obpgDQGcFmaJgB", "onwK4e9ZLuTAKqWW03F9"],
+    "eleven_female_voices": ["21m00Tcm4TlvDq8ikWAM", "EXAVITQu4vr4xnSDxMaL"],
+    "eleven_stability": 0.45,
+    "eleven_similarity": 0.8,
+    "eleven_style": 0.25,
+    "eleven_speed": 1.0,
+    "edge_female_voice": "pt-BR-FranciscaNeural",
 }
 
 
@@ -144,11 +161,17 @@ def coerce_settings(changes: dict) -> dict:
 # Linguagem do texto gerado pelo sistema (descrição, avisos), por idioma do canal.
 LANG_TEXT = {
     "pt": {"fiction": "⚠️ História de ficção / lenda.", "sources": "Fontes", "wpm": 140, "name": "português do Brasil",
-           "part": "Parte", "previous": "Parte anterior", "series": "Série", "playlist": "Assista a série completa"},
+           "part": "Parte", "previous": "Parte anterior", "series": "Série", "playlist": "Assista a série completa",
+           "narrator": "NARRADOR", "continues": "CONTINUA NA PARTE", "end": "FIM",
+           "follow": "Siga para não perder a próxima parte!"},
     "en": {"fiction": "⚠️ Fictional story / legend.", "sources": "Sources", "wpm": 150, "name": "English (US)",
-           "part": "Part", "previous": "Previous part", "series": "Series", "playlist": "Watch the full series"},
+           "part": "Part", "previous": "Previous part", "series": "Series", "playlist": "Watch the full series",
+           "narrator": "NARRATOR", "continues": "CONTINUES IN PART", "end": "THE END",
+           "follow": "Follow so you don't miss the next part!"},
     "es": {"fiction": "⚠️ Historia de ficción / leyenda.", "sources": "Fuentes", "wpm": 150, "name": "español latinoamericano",
-           "part": "Parte", "previous": "Parte anterior", "series": "Serie", "playlist": "Mira la serie completa"},
+           "part": "Parte", "previous": "Parte anterior", "series": "Serie", "playlist": "Mira la serie completa",
+           "narrator": "NARRADOR", "continues": "CONTINÚA EN LA PARTE", "end": "FIN",
+           "follow": "¡Sígueme para no perderte la próxima parte!"},
 }
 
 
@@ -296,6 +319,50 @@ NICHE_PRESETS: dict[str, dict] = {
             "auto_series": True,
             "series_parts": 4,
             "series_every_days": 5,
+        },
+    },
+    "mininovela_suspense": {
+        "label": "Mininovela de suspense (TikTok/Kwai)",
+        "description": "Novela vertical em capítulos de 61-110s com personagens e vozes próprias: segredos, "
+                       "desaparecimentos, sobrenatural. Formato que mais cresce no Kwai; elegível ao TikTok (>60s).",
+        "settings": {
+            "niche": "mininovelas originais de suspense e mistério: segredos de família, desaparecimentos, "
+                     "casas e cidades com algo errado, toques de sobrenatural — sempre ficção",
+            "style": "novela vertical: diálogos curtos e tensos entre personagens, narrador só para ligar as cenas",
+            "content_mix": ["mininovela_suspense", "misterio_familiar", "sobrenatural"],
+            "default_tags": ["mininovela", "novela", "suspense", "mistério", "série"],
+            "research_with_web": False,
+            "shorts_per_day": 0,
+            "long_per_day": 0,
+            "auto_series": True,
+            "series_format": "novela",
+            "series_parts": 5,
+            "series_every_days": 4,
+            "series_playlists": False,
+            "min_duration_s": 61,
+            "subtitle_color": "#FFD23F",
+        },
+    },
+    "mininovela_drama": {
+        "label": "Mininovela de drama e reviravoltas",
+        "description": "Traições, heranças, segredos e vinganças em capítulos curtos — o gênero mais popular "
+                       "das mininovelas no Brasil. Ficção com personagens fixos e várias vozes.",
+        "settings": {
+            "niche": "mininovelas originais de drama: traições, segredos de família, heranças, vinganças e "
+                     "reviravoltas, com personagens marcantes — sempre ficção, sem conteúdo explícito",
+            "style": "novela de TV em ritmo de rede social: conflito logo no início, falas afiadas, reviravolta no fim",
+            "content_mix": ["drama_familiar", "traicao", "vinganca", "segredo"],
+            "default_tags": ["mininovela", "novela", "drama", "reviravolta", "série"],
+            "research_with_web": False,
+            "shorts_per_day": 0,
+            "long_per_day": 0,
+            "auto_series": True,
+            "series_format": "novela",
+            "series_parts": 6,
+            "series_every_days": 5,
+            "series_playlists": False,
+            "min_duration_s": 61,
+            "subtitle_color": "#FF5FA2",
         },
     },
     "unsolved_en": {

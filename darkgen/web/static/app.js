@@ -12,7 +12,7 @@ const STATUS_LABEL = {
 const KIND_LABEL = { short: "Short", long: "Longo" };
 const HEALTH = { ok: ["good", "✓", "Saudável"], warning: ["warn", "!", "Atenção"], critical: ["bad", "✕", "Crítico"] };
 const SEV_ICON = { critical: "✕", warning: "!", info: "i" };
-const LIST_FIELDS = ["default_tags", "content_mix"];
+const LIST_FIELDS = ["default_tags", "content_mix", "eleven_male_voices", "eleven_female_voices"];
 
 function store(k, v) { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch { return null; } return null; }
 
@@ -69,8 +69,8 @@ let currentChannel = null;  // id do canal selecionado
 let refreshTimer;
 
 const channelPages = { overview: loadOverview, videos: loadVideos, new: initNew, series: loadSeries, times: loadTimes, analytics: loadAnalytics, config: loadConfig };
-const globalPages = { portfolio: loadPortfolio, "videos-all": loadAllVideos, "new-channel": loadNewChannel, settings: loadSettings, trends: loadTrends };
-const globalHash = { "": "portfolio", portfolio: "portfolio", videos: "videos-all", "new-channel": "new-channel", settings: "settings", trends: "trends" };
+const globalPages = { portfolio: loadPortfolio, "videos-all": loadAllVideos, "new-channel": loadNewChannel, settings: loadSettings, trends: loadTrends, post: loadPost };
+const globalHash = { "": "portfolio", portfolio: "portfolio", videos: "videos-all", "new-channel": "new-channel", settings: "settings", trends: "trends", post: "post" };
 
 async function refreshChannels() {
   channels = await api("/api/channels");
@@ -129,6 +129,7 @@ async function renderSideStatus() {
       <div>${dot(pf.worker_alive)} Worker</div>
       <div>${dot(pf.claude_configured)} Claude API</div>
       <div class="muted">${pf.totals.active}/${pf.totals.channels} canais ativos</div>`;
+    $("#nav-post-count").textContent = pf.totals.ready_to_post ? pf.totals.ready_to_post : "";
   } catch { /* ignore */ }
 }
 
@@ -549,6 +550,7 @@ $("#form-series").addEventListener("submit", (e) => {
     const s = await api(`/api/channels/${currentChannel}/series`, { method: "POST", json: {
       parts: +f.elements.parts.value, kind: f.elements.kind.value, topic: f.elements.topic.value || null,
       angle: f.elements.angle.value || null, is_fiction: f.elements.is_fiction.checked, start_date: f.elements.start_date.value || null,
+      fmt: f.elements.fmt.value || null,
     } });
     toast(`Série criada: ${s.parts} partes, de ${fmtWhen(s.first_at)} a ${fmtWhen(s.last_at)}.`);
     f.reset(); loadSeries();
@@ -608,6 +610,13 @@ async function loadAnalytics() {
       perfData.per_category.map((r) => `<tr class="static"><td>${esc(r.category)}</td><td class="num">${r.videos}</td><td class="num">${fmt(r.avg_views)}</td></tr>`).join("")}</tbody></table></div>`
     : `<div class="empty">Sem dados ainda.</div>`;
   renderPerfChart();
+  const ps = await api(`/api/platform-stats?channel_id=${currentChannel}`);
+  $("#platform-table").innerHTML = ps.platforms.length ? `<div class="table-wrap"><table><thead><tr><th>Rede</th><th class="num">Posts</th><th class="num">Com números</th><th class="num">Views médias</th><th class="num">Views</th></tr></thead><tbody>${
+    ps.platforms.map((r) => `<tr class="static"><td>${esc(r.label)}</td><td class="num">${r.posts}</td><td class="num">${r.with_stats}</td><td class="num">${fmt(r.avg_views)}</td><td class="num">${fmt(r.views)}</td></tr>`).join("")}</tbody></table></div>`
+    : `<div class="empty">Marque as postagens e anote as views na fila “Pronto para postar”.</div>`;
+  $("#series-stats").innerHTML = ps.series.length ? `<div class="table-wrap"><table><thead><tr><th>Série</th><th class="num">Views</th><th>Por parte</th><th class="num">Última ÷ 1ª</th></tr></thead><tbody>${
+    ps.series.map((r) => `<tr class="static"><td class="title">${esc(r.title || `#${r.series_id}`)}</td><td class="num">${fmt(r.views)}</td><td class="nowrap">${Object.entries(r.views_by_episode).map(([e, v]) => `P${e}: ${compact(v)}`).join(" · ")}</td><td class="num">${r.retention_last_vs_first != null ? `${Math.round(r.retention_last_vs_first * 100)}%` : "—"}</td></tr>`).join("")}</tbody></table></div>`
+    : `<div class="empty">Sem dados de séries ainda.</div>`;
 }
 function renderPerfChart() {
   if (!perfData) return;
@@ -682,6 +691,7 @@ async function loadConfig() {
   for (const [k, v] of Object.entries(s)) {
     const input = form.elements[k];
     if (!input) continue;
+    if (k === "platforms") { $$("input[name=platforms]", form).forEach((c) => (c.checked = v.includes(c.value))); continue; }
     if (input.type === "checkbox") input.checked = !!v;
     else input.value = LIST_FIELDS.includes(k) ? v.join(", ") : v;
   }
@@ -700,6 +710,7 @@ $("#form-settings").addEventListener("submit", (e) => {
   const out = {};
   for (const el of e.target.elements) {
     if (!el.name) continue;
+    if (el.name === "platforms") { if (el.checked) (out.platforms = out.platforms || []).push(el.value); else out.platforms = out.platforms || []; continue; }
     if (el.type === "checkbox") out[el.name] = el.checked;
     else if (el.type === "number") out[el.name] = Number(el.value);
     else if (LIST_FIELDS.includes(el.name)) out[el.name] = el.value.split(",").map((t) => t.trim()).filter(Boolean);
@@ -805,6 +816,122 @@ $("#form-scan-social").addEventListener("submit", (e) => {
     renderScan(r); loadTrends();
   });
 });
+
+// ============================================================ pronto para postar (publicação manual)
+const PLATFORM_ICON = { tiktok: "♪", kwai: "K", instagram: "◎", youtube: "▶" };
+let postTab = {}; // aba escolhida por vídeo
+
+async function loadPost() {
+  const sel = $("#post-channel");
+  const prev = sel.value;
+  sel.innerHTML = `<option value="">Todos os canais</option>` + channels.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join("");
+  sel.value = prev;
+  const kits = await api(`/api/post-queue?limit=60${sel.value ? `&channel_id=${sel.value}` : ""}`);
+  $("#post-count").textContent = kits.length ? `${kits.length} vídeo(s) na fila` : "";
+  $("#post-list").innerHTML = kits.length ? kits.map(postCard).join("")
+    : `<div class="card empty">Nada para postar agora. Os vídeos aparecem aqui assim que são renderizados.</div>`;
+  bindPostCards();
+}
+
+function postCard(k) {
+  const tab = postTab[k.video_id] || k.platforms.find((p) => !p.posted)?.platform || k.platforms[0]?.platform;
+  const done = k.platforms.filter((p) => p.posted).length;
+  const p = k.platforms.find((x) => x.platform === tab) || k.platforms[0];
+  return `<div class="card post-card" data-id="${k.video_id}">
+    <div class="post-media">
+      <a class="btn primary block" href="${esc(k.download_url)}">⬇ Baixar vídeo</a>
+      ${k.has_file ? `<video controls preload="none" playsinline poster="/media/${k.video_id}/thumb${tokenQS()}" src="/media/${k.video_id}/video${tokenQS()}"></video>` : ""}
+    </div>
+    <div class="post-body">
+      <div class="muted small">${esc(k.channel_name)} · ${k.episode ? `${esc(k.series_title || "")} · Parte ${k.episode}/${k.parts}` : "vídeo avulso"} · ${k.duration_s ? `${Math.round(k.duration_s)}s` : ""}</div>
+      <strong class="post-title">${esc(k.title)}</strong>
+      <div class="muted small">Horário sugerido: ${esc(timeAgo(k.suggested_time))} · ${done}/${k.platforms.length} redes</div>
+      <div class="post-tabs">${k.platforms.map((x) => `<button type="button" class="ptab ${x.platform === tab ? "active" : ""} ${x.posted ? "done" : ""}" data-tab="${x.platform}">
+        <span class="pi">${PLATFORM_ICON[x.platform] || "•"}</span>${esc(x.label)}${x.posted ? " ✓" : ""}</button>`).join("")}</div>
+      ${p ? `<div class="post-panel">
+        ${p.title ? `<label>Título <textarea class="ptitle" rows="2" readonly>${esc(p.title)}</textarea></label><button type="button" class="btn small" data-copy=".ptitle">Copiar título</button>` : ""}
+        <label>Legenda <textarea class="pcaption" rows="7" readonly>${esc(p.caption)}</textarea></label>
+        <div class="actions"><button type="button" class="btn" data-copy=".pcaption">Copiar legenda</button></div>
+        <div class="note small">🤖 ${esc(p.ai_label)}</div>
+        <div class="muted small">💡 ${esc(p.tip)}</div>
+        ${p.posted ? `<div class="posted-box">
+            <div>✓ Postado ${esc(timeAgo(p.posted.posted_at))}${p.posted.url ? ` · <a href="${esc(p.posted.url)}" target="_blank" rel="noopener">abrir</a>` : ""}</div>
+            <div class="row four">
+              <label>Views <input type="number" min="0" name="views" value="${p.posted.views ?? ""}"></label>
+              <label>Curtidas <input type="number" min="0" name="likes" value="${p.posted.likes ?? ""}"></label>
+              <label>Coment. <input type="number" min="0" name="comments" value="${p.posted.comments ?? ""}"></label>
+              <label>Compart. <input type="number" min="0" name="shares" value="${p.posted.shares ?? ""}"></label>
+            </div>
+            <div class="actions"><button type="button" class="btn" data-act="stats">Salvar números</button><button type="button" class="btn danger small" data-act="unpost">Desfazer</button></div>
+          </div>` : `<div class="actions">
+            <input class="purl" placeholder="Link do post (opcional)">
+            <button type="button" class="btn primary" data-act="posted">Marcar como postado no ${esc(p.label)}</button></div>`}
+      </div>` : ""}
+    </div></div>`;
+}
+
+function bindPostCards() {
+  $$("#post-list .post-card").forEach((card) => {
+    const id = +card.dataset.id;
+    const tab = () => $(".ptab.active", card)?.dataset.tab;
+    $$(".ptab", card).forEach((b) => b.addEventListener("click", () => { postTab[id] = b.dataset.tab; refreshCard(id); }));
+    $$("[data-copy]", card).forEach((b) => b.addEventListener("click", async () => {
+      const ta = $(b.dataset.copy, card);
+      try { await navigator.clipboard.writeText(ta.value); } catch { ta.select(); document.execCommand("copy"); }
+      toast("Copiado.");
+    }));
+    $$("[data-act]", card).forEach((b) => b.addEventListener("click", () => busy(b, async () => {
+      const platform = tab();
+      if (b.dataset.act === "posted") {
+        await api(`/api/videos/${id}/posted`, { method: "POST", json: { platform, url: $(".purl", card).value || null } });
+        toast("Marcado como postado.");
+      } else if (b.dataset.act === "unpost") {
+        await api(`/api/videos/${id}/posted/${platform}`, { method: "DELETE" });
+      } else {
+        const json = {};
+        for (const k of ["views", "likes", "comments", "shares"]) { const v = $(`[name=${k}]`, card).value; if (v !== "") json[k] = +v; }
+        await api(`/api/videos/${id}/posted/${platform}`, { method: "PATCH", json });
+        toast("Números salvos.");
+      }
+      refreshCard(id);
+    })));
+  });
+}
+
+async function refreshCard(id) {
+  const k = await api(`/api/videos/${id}/post-kit`);
+  const old = $(`#post-list .post-card[data-id="${id}"]`);
+  const wrap = document.createElement("div");
+  wrap.innerHTML = postCard(k);
+  old.replaceWith(wrap.firstElementChild);
+  bindPostCards();
+}
+$("#post-channel").addEventListener("change", loadPost);
+
+// ============================================================ vozes da ElevenLabs (configurações do canal)
+async function loadVoices() {
+  const box = $("#voices-box");
+  box.innerHTML = `<p class="muted">Carregando vozes…</p>`;
+  try {
+    const voices = await api(`/api/elevenlabs/voices${$("#voice-search").value ? `?search=${encodeURIComponent($("#voice-search").value)}` : ""}`);
+    box.innerHTML = voices.length ? `<div class="voice-list">${voices.map((v) => `<div class="voice">
+      <div><strong>${esc(v.name)}</strong> <span class="muted small">${esc([v.gender, v.age, v.accent].filter(Boolean).join(" · "))}</span>
+      <div class="muted small">${esc(v.languages.join(", ") || v.category || "")}</div></div>
+      ${v.preview_url ? `<audio controls preload="none" src="${esc(v.preview_url)}"></audio>` : ""}
+      <div class="actions"><button type="button" class="btn small" data-voice="${esc(v.voice_id)}" data-to="eleven_narrator_voice">Narrador</button>
+        <button type="button" class="btn small" data-voice="${esc(v.voice_id)}" data-to="eleven_male_voices">+ Masc.</button>
+        <button type="button" class="btn small" data-voice="${esc(v.voice_id)}" data-to="eleven_female_voices">+ Fem.</button></div></div>`).join("")}</div>`
+      : `<div class="empty">Nenhuma voz encontrada. Adicione vozes em português na Voice Library da ElevenLabs.</div>`;
+    $$("#voices-box [data-voice]", box).forEach((b) => b.addEventListener("click", () => {
+      const input = $("#form-settings").elements[b.dataset.to];
+      if (b.dataset.to === "eleven_narrator_voice") input.value = b.dataset.voice;
+      else input.value = [...new Set([...input.value.split(",").map((x) => x.trim()).filter(Boolean), b.dataset.voice])].join(", ");
+      toast("Voz adicionada ao formulário. Clique em Salvar.");
+    }));
+  } catch (err) { box.innerHTML = `<div class="err">${esc(err.message)}</div>`; }
+}
+
+$("#btn-voices").addEventListener("click", loadVoices);
 
 // ============================================================ configurações gerais
 async function loadSettings() {

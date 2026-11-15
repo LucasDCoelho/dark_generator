@@ -94,6 +94,19 @@ CREATE TABLE IF NOT EXISTS series (
     updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS postings (
+    video_id INTEGER NOT NULL,
+    platform TEXT NOT NULL,
+    posted_at TEXT NOT NULL,
+    url TEXT,
+    views INTEGER,
+    likes INTEGER,
+    comments INTEGER,
+    shares INTEGER,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (video_id, platform)
+);
+
 CREATE TABLE IF NOT EXISTS trend_scans (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ts TEXT NOT NULL,
@@ -127,6 +140,7 @@ STATUSES = [
     "scripted",    # roteiro pronto; aguardando renderização
     "rendering",
     "rendered",    # vídeo pronto; aguardando aprovação/upload
+    "ready",       # modo manual: pronto para postar nas redes (kit com legendas)
     "uploading",
     "scheduled",   # no YouTube como privado com publishAt no futuro
     "published",
@@ -211,6 +225,11 @@ def _ensure_columns(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE videos ADD COLUMN series_id INTEGER")
     if "episode" not in cols:
         conn.execute("ALTER TABLE videos ADD COLUMN episode INTEGER")
+    scols = _columns(conn, "series")
+    if "format" not in scols:
+        conn.execute("ALTER TABLE series ADD COLUMN format TEXT NOT NULL DEFAULT 'narrated'")
+    if "bible" not in scols:
+        conn.execute("ALTER TABLE series ADD COLUMN bible TEXT")
 
 
 @contextmanager
@@ -299,6 +318,7 @@ def update_channel(channel_id: int, settings: dict | None = None, **fields: Any)
 
 def delete_channel(channel_id: int) -> None:
     with connect() as c:
+        c.execute("DELETE FROM postings WHERE video_id IN (SELECT id FROM videos WHERE channel_id = ?)", (channel_id,))
         c.execute("DELETE FROM videos WHERE channel_id = ?", (channel_id,))
         c.execute("DELETE FROM series WHERE channel_id = ?", (channel_id,))
         c.execute("DELETE FROM activity WHERE channel_id = ?", (channel_id,))
@@ -376,6 +396,7 @@ def transition(video_id: int, from_status: str, to_status: str) -> bool:
 def delete_video(video_id: int) -> None:
     with connect() as c:
         c.execute("DELETE FROM videos WHERE id = ?", (video_id,))
+        c.execute("DELETE FROM postings WHERE video_id = ?", (video_id,))
 
 
 def list_videos(
@@ -548,6 +569,7 @@ def _row_to_series(row: sqlite3.Row | None) -> dict | None:
     d = dict(row)
     d["is_fiction"] = bool(d["is_fiction"])
     d["sources"] = json.loads(d["sources"] or "[]")
+    d["bible"] = json.loads(d["bible"]) if d.get("bible") else None
     return d
 
 
@@ -569,8 +591,9 @@ def get_series(series_id: int) -> dict | None:
 
 
 def update_series(series_id: int, **fields: Any) -> dict | None:
-    if "sources" in fields and not isinstance(fields["sources"], str):
-        fields["sources"] = json.dumps(fields["sources"], ensure_ascii=False)
+    for k in ("sources", "bible"):
+        if k in fields and fields[k] is not None and not isinstance(fields[k], str):
+            fields[k] = json.dumps(fields[k], ensure_ascii=False)
     if fields:
         data = _encode({**fields, "updated_at": now_utc()})
         with connect() as c:
@@ -618,3 +641,44 @@ def previous_episode(video: dict) -> dict | None:
         row = c.execute("SELECT * FROM videos WHERE series_id = ? AND episode < ? ORDER BY episode DESC LIMIT 1",
                         (video["series_id"], video["episode"])).fetchone()
     return _row_to_video(row)
+
+
+# ---------------------------------------------------------------- postagens manuais nas redes
+
+def upsert_posting(video_id: int, platform: str, **fields: Any) -> dict:
+    ts = iso(now_utc())
+    with connect() as c:
+        row = c.execute("SELECT * FROM postings WHERE video_id = ? AND platform = ?", (video_id, platform)).fetchone()
+        if row is None:
+            data = {"video_id": video_id, "platform": platform, "posted_at": fields.pop("posted_at", None) or ts,
+                    **fields, "updated_at": ts}
+            data = _encode(data)
+            c.execute(f"INSERT INTO postings ({', '.join(data)}) VALUES ({', '.join('?' for _ in data)})",
+                      list(data.values()))
+        elif fields:
+            data = _encode({**fields, "updated_at": ts})
+            c.execute(f"UPDATE postings SET {', '.join(f'{k} = ?' for k in data)} WHERE video_id = ? AND platform = ?",
+                      [*data.values(), video_id, platform])
+        row = c.execute("SELECT * FROM postings WHERE video_id = ? AND platform = ?", (video_id, platform)).fetchone()
+    return dict(row)
+
+
+def postings_for(video_id: int) -> list[dict]:
+    with connect() as c:
+        return [dict(r) for r in c.execute("SELECT * FROM postings WHERE video_id = ? ORDER BY posted_at", (video_id,))]
+
+
+def delete_posting(video_id: int, platform: str) -> None:
+    with connect() as c:
+        c.execute("DELETE FROM postings WHERE video_id = ? AND platform = ?", (video_id, platform))
+
+
+def postings_by_channel(channel_id: int | None = None) -> list[dict]:
+    sql = ("SELECT p.*, v.channel_id, v.series_id, v.episode, v.kind, v.title FROM postings p "
+           "JOIN videos v ON v.id = p.video_id")
+    args: tuple = ()
+    if channel_id is not None:
+        sql += " WHERE v.channel_id = ?"
+        args = (channel_id,)
+    with connect() as c:
+        return [dict(r) for r in c.execute(sql + " ORDER BY p.posted_at DESC", args)]

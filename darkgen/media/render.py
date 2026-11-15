@@ -39,26 +39,6 @@ def _font_file() -> str:
     return "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 
 
-def scene_times(scenes: list[dict], words: list[tts.Word], total: float) -> list[tuple[float, float]]:
-    """Calcula início/fim de cada cena alinhando a contagem de palavras do roteiro aos tempos do TTS."""
-    counts = [max(1, len(s["narration"].split())) for s in scenes]
-    total_words = sum(counts)
-    starts, acc = [], 0
-    for c in counts:
-        if not words:
-            starts.append(total * acc / total_words)
-        else:
-            idx = min(len(words) - 1, round(acc / total_words * len(words)))
-            starts.append(words[idx].start)
-        acc += c
-    starts[0] = 0.0
-    times = []
-    for i, st in enumerate(starts):
-        end = starts[i + 1] if i + 1 < len(starts) else total
-        times.append((st, max(end, st + 0.5)))
-    return times
-
-
 def _music_input(duration: float) -> list[str]:
     from ..config import env
 
@@ -97,29 +77,70 @@ def make_thumbnail(frame_src: Path, text: str, out: Path, kind: str) -> Path:
     return out
 
 
-def render_video(video: dict, settings: dict, workdir: Path) -> RenderResult:
+def script_lines(scenes: list[dict]) -> list[tuple[int, str, str]]:
+    """(índice da cena, quem fala, texto) — aceita cenas narradas ou com falas (novela)."""
+    out = []
+    for i, sc in enumerate(scenes):
+        if sc.get("lines"):
+            out += [(i, ln.get("speaker") or "NARRADOR", ln["text"]) for ln in sc["lines"] if ln.get("text", "").strip()]
+        elif sc.get("narration", "").strip():
+            out.append((i, "NARRADOR", sc["narration"]))
+    return out
+
+
+def scene_times_from_segments(n_scenes: int, scene_of_line: list[int], segments: list[tts.Segment],
+                              total: float) -> list[tuple[float, float]]:
+    """Cada cena começa na primeira fala dela e vai até a próxima cena (a última vai até o fim)."""
+    starts: dict[int, float] = {}
+    for seg in segments:
+        sc = scene_of_line[seg.line_index]
+        starts.setdefault(sc, seg.start)
+    order = sorted(starts)
+    times: dict[int, tuple[float, float]] = {}
+    for j, sc in enumerate(order):
+        st = 0.0 if j == 0 else starts[sc]
+        en = starts[order[j + 1]] if j + 1 < len(order) else total
+        times[sc] = (st, max(en, st + 0.5))
+    return [times[i] for i in order][:n_scenes]
+
+
+def render_video(video: dict, settings: dict, workdir: Path, extras: dict | None = None) -> RenderResult:
+    """`extras` (opcional): episode, parts, bible (personagens/vozes), labels (textos no idioma do canal)."""
+    from .voices import is_narrator, voice_for
+
+    extras = extras or {}
     workdir.mkdir(parents=True, exist_ok=True)
     kind = video["kind"]
-    script = video["script"]
-    scenes = script["scenes"]
-    full_text = " ".join(s["narration"].strip() for s in scenes)
+    scenes = video["script"]["scenes"]
 
-    # 1) narração
-    narration = tts.synthesize(
-        full_text, workdir / "narration.mp3",
-        voice=settings["voice"], rate=settings["voice_rate"], pitch=settings["voice_pitch"],
-    )
-    total = narration.duration + TAIL_S
-    log.info("Narração: %.1fs, %d palavras", narration.duration, len(narration.words))
+    # 1) voz: cada fala com a voz do seu personagem
+    provider = tts.resolve_provider(settings)
+    raw = script_lines(scenes)
+    lines = [tts.Line(sp, txt, voice_for(sp, provider, settings, extras.get("bible"))) for _, sp, txt in raw]
+    narration = tts.synthesize_lines(lines, workdir / "narration.mp3", settings)
+    total = max(narration.duration + TAIL_S, float(settings.get("min_duration_s") or 0))
+    log.info("Voz (%s): %.1fs, %d falas, %d palavras", provider, narration.duration, len(lines), len(narration.words))
 
-    # 2) legendas
-    subtitles.build_ass(narration.words, workdir / "subs.ass", kind, settings.get("subtitle_color", "#FF4B4B"))
+    # 2) legendas + nome de quem fala + letreiros de série
+    speakers = [(raw[seg.line_index][1], seg.start, seg.end) for seg in narration.segments
+                if not is_narrator(raw[seg.line_index][1])]
+    overlays = []
+    labels = extras.get("labels") or {}
+    ep, parts = extras.get("episode"), extras.get("parts")
+    if ep:
+        overlays.append((f"{labels.get('part', 'Parte')} {ep}", 0.0, min(2.6, total)))
+        if parts:
+            card = f"{labels.get('continues', 'CONTINUA NA PARTE')} {ep + 1}" if ep < parts else labels.get("end", "FIM")
+            overlays.append((card, max(0.0, total - 2.6), total))
+    subtitles.build_ass(narration.words, workdir / "subs.ass", kind, settings.get("subtitle_color", "#FF4B4B"),
+                        speakers=speakers, overlays=overlays)
 
     # 3) segmentos visuais por cena
     used: set[int] = set()
     seg_files = []
     first_source = None
-    for i, ((start, end), scene) in enumerate(zip(scene_times(scenes, narration.words, total), scenes)):
+    times = scene_times_from_segments(len(scenes), [sc for sc, _, _ in raw], narration.segments, total)
+    for i, ((start, end), scene) in enumerate(zip(times, scenes)):
         src = None
         try:
             src = visuals.search_pexels(scene.get("visual_query") or "dark night", kind, used)

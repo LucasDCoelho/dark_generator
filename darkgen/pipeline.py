@@ -90,12 +90,25 @@ def _stage_render(video: dict, channel: dict) -> None:
     from .media.render import render_video
 
     workdir = env().videos_dir / f"{video['id']:05d}"
-    result = render_video(video, channel["settings"], workdir)
+    extras: dict = {"labels": lang_text(channel["settings"]["language"])}
+    if video.get("series_id"):
+        srs = db.get_series(video["series_id"])
+        if srs:
+            extras.update(episode=video.get("episode"), parts=srs["parts"], bible=srs.get("bible"))
+    result = render_video(video, channel["settings"], workdir, extras)
     db.update_video(
-        video["id"], status="rendered", video_path=str(result.video_path), thumb_path=str(result.thumb_path),
-        duration_s=round(result.duration, 1), error=None,
+        video["id"], status=after_render_status(video, channel), video_path=str(result.video_path),
+        thumb_path=str(result.thumb_path), duration_s=round(result.duration, 1), error=None,
     )
     db.log(f"Vídeo renderizado ({result.duration:.0f}s)", video_id=video["id"], channel_id=channel["id"])
+
+
+def after_render_status(video: dict, channel: dict) -> str:
+    """Modo manual: vai direto para 'Pronto para postar' (se não precisar de aprovação)."""
+    s = channel["settings"]
+    if s["publish_mode"] == "manual" and (not s["approval_required"] or video.get("approved")):
+        return "ready"
+    return "rendered"
 
 
 def _stage_upload(video: dict, channel: dict) -> None:
@@ -176,9 +189,15 @@ def create_series_plan(
     angle: str | None = None,
     is_fiction: bool = False,
     start_day=None,
+    fmt: str | None = None,
 ) -> dict:
     """Cria a série e já reserva os horários dos episódios (um por dia, em dias seguidos).
-    Os roteiros são escritos depois pelo worker (etapa de série)."""
+    Os roteiros são escritos depois pelo worker (etapa de série). fmt: narrated | novela."""
+    fmt = fmt or channel["settings"].get("series_format", "narrated")
+    if fmt not in ("narrated", "novela"):
+        raise ValueError("Formato deve ser 'narrated' ou 'novela'.")
+    if fmt == "novela":
+        is_fiction = True
     if not 2 <= parts <= 10:
         raise ValueError("Uma série deve ter de 2 a 10 partes.")
     if kind not in ("short", "long"):
@@ -187,7 +206,7 @@ def create_series_plan(
     start_day = start_day or datetime.now(tz).date()
     slots = best_times.series_slots(channel, kind, parts, start_day)
     series = db.create_series(channel["id"], kind, parts, status="queued", topic=topic, angle=angle,
-                              is_fiction=is_fiction, title=topic)
+                              is_fiction=is_fiction, title=topic, format=fmt)
     for n, slot in enumerate(slots, start=1):
         db.create_video(channel["id"], kind, status="queued", series_id=series["id"], episode=n,
                         scheduled_at=slot, topic=topic, is_fiction=is_fiction)
@@ -197,7 +216,7 @@ def create_series_plan(
 
 
 def fill_series(series: dict, channel: dict, title: str, logline: str, episodes: list[dict],
-                is_fiction: bool, sources: list[str] | None = None) -> None:
+                is_fiction: bool, sources: list[str] | None = None, characters: list[dict] | None = None) -> None:
     """Grava os roteiros nos episódios reservados e marca a série como pronta."""
     s = channel["settings"]
     eps = {v["episode"]: v for v in db.episodes(series["id"])}
@@ -212,8 +231,13 @@ def fill_series(series: dict, channel: dict, title: str, logline: str, episodes:
             thumbnail_text=ep.get("thumbnail_text") or ep["title"], is_fiction=is_fiction,
             sources=sources or [], script={"scenes": ep["scenes"]}, error=None,
         )
+    bible = None
+    if characters:
+        from .media.voices import assign_voices
+
+        bible = {"characters": characters, "voices": assign_voices(characters, s)}
     db.update_series(series["id"], status="ready", title=title, logline=logline, is_fiction=is_fiction,
-                     sources=sources or [], error=None)
+                     sources=sources or [], error=None, bible=bible)
     db.log(f"Série pronta: {title} ({len(episodes)} partes)", channel_id=channel["id"])
 
 
@@ -226,6 +250,12 @@ def _stage_series(series: dict, channel: dict) -> None:
                                      series_parts=series["parts"])[0]
         topic, angle, is_fiction = idea.topic, idea.angle, idea.is_fiction
         db.update_series(series["id"], topic=topic, angle=angle, is_fiction=is_fiction)
+    if series.get("format") == "novela":
+        novela = writer.write_novela(channel, topic, series["parts"], series["kind"], angle=angle)
+        fill_series(series, channel, novela.series_title, novela.logline,
+                    [e.model_dump() for e in novela.episodes], True,
+                    characters=[c.model_dump() for c in novela.characters])
+        return
     dossier, sources = "", []
     if channel["settings"]["research_with_web"] and not is_fiction:
         r = writer.research(topic, angle)
@@ -337,7 +367,9 @@ def _next_upload() -> tuple[dict, dict] | None:
     for v in db.list_videos(status="rendered", active_channels_only=True, limit=500,
                             order="scheduled_at IS NULL, scheduled_at ASC"):
         ch = channels.get(v["channel_id"])
-        if not ch or (ch["settings"]["approval_required"] and not v["approved"]):
+        if not ch or ch["settings"]["publish_mode"] != "youtube_api":
+            continue
+        if ch["settings"]["approval_required"] and not v["approved"]:
             continue
         if ch["id"] not in connected:
             connected[ch["id"]] = yt.is_connected(ch["id"])
@@ -428,7 +460,8 @@ def retry(video_id: int) -> dict | None:
     if v.get("youtube_id"):
         status = "scheduled"
     elif v.get("video_path") and os.path.exists(v["video_path"]):
-        status = "rendered"
+        ch = db.get_channel(v["channel_id"])
+        status = after_render_status(v, ch) if ch else "rendered"
     elif v.get("script"):
         status = "scripted"
     else:
@@ -517,7 +550,8 @@ def maybe_start_series(channel: dict) -> dict | None:
         return None
     start = datetime.now(tz_of(channel)).date() + timedelta(days=s["plan_days_ahead"] + 1)
     try:
-        return create_series_plan(channel, s["series_parts"], s["series_kind"], start_day=start)
+        return create_series_plan(channel, s["series_parts"], s["series_kind"], start_day=start,
+                                  fmt=s["series_format"])
     except ValueError as e:
         db.log(f"Série automática não criada: {e}", "warning", channel_id=channel["id"])
         return None

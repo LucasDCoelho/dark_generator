@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Literal
 
 import anthropic
 from pydantic import BaseModel, Field
@@ -280,3 +281,97 @@ def write_series(
     script.episodes = script.episodes[:parts]
     script.is_fiction = script.is_fiction or is_fiction
     return script
+
+
+# ---------------------------------------------------------------- mininovela (personagens e diálogos)
+
+class NovelaCharacter(BaseModel):
+    name: str = Field(description="Nome curto e marcante (ex.: 'Helena'). Nunca 'NARRADOR'.")
+    gender: Literal["male", "female"]
+    age: str = Field(description="Faixa etária, ex.: '30 anos'.")
+    role: str = Field(description="Papel na trama em poucas palavras.")
+    personality: str = Field(description="Jeito de falar e personalidade, para manter a voz consistente.")
+
+
+class NovelaLine(BaseModel):
+    speaker: str = Field(description="'NARRADOR' ou o nome EXATO de um personagem da ficha.")
+    text: str = Field(description="Fala curta e natural, no idioma do canal, sem rubricas entre parênteses.")
+
+
+class NovelaScene(BaseModel):
+    lines: list[NovelaLine]
+    visual_query: str = Field(description="2-4 palavras em INGLÊS para o fundo da cena (ex.: 'old mansion hallway').")
+
+
+class NovelaEpisode(BaseModel):
+    title: str = Field(description="Título do capítulo, até 90 caracteres, terminando com '(Parte N)'.")
+    description: str = Field(description="Legenda curta do capítulo com 3-5 hashtags no fim.")
+    tags: list[str] = Field(description="8 a 12 tags.")
+    thumbnail_text: str = Field(description="2 a 4 palavras de impacto.")
+    scenes: list[NovelaScene]
+
+
+class NovelaSeries(BaseModel):
+    series_title: str
+    logline: str = Field(description="Gancho da novela em 1-2 frases, sem spoiler.")
+    characters: list[NovelaCharacter] = Field(description="2 a 4 personagens fixos.")
+    episodes: list[NovelaEpisode]
+
+
+def novela_shape(channel: dict, kind: str) -> str:
+    wpm = lang_text(channel["settings"]["language"])["wpm"]
+    if kind == "short":
+        lo, hi = int(wpm * 1.05), int(wpm * 1.75)
+        return (f"capítulo vertical de 61 a 110 segundos: {lo} a {hi} palavras no total, 4 a 8 cenas, "
+                "a maior parte em diálogo")
+    mins = channel["settings"]["long_target_minutes"]
+    return f"capítulo de ~{mins} minutos: cerca de {mins * wpm} palavras, 12 a 25 cenas, a maior parte em diálogo"
+
+
+def write_novela(channel: dict, topic: str, parts: int, kind: str = "short", angle: str = "") -> NovelaSeries:
+    """Escreve a mininovela inteira (ficha de personagens + todos os capítulos) numa chamada só."""
+    part_word = lang_text(channel["settings"]["language"])["part"]
+    narrator = lang_text(channel["settings"]["language"])["narrator"]
+    prompt = (
+        f"Escreva uma MININOVELA original em {parts} capítulos para TikTok, Kwai, Reels e Shorts.\n"
+        f"Premissa: {topic}\nEnfoque: {angle or 'livre'}\n\n"
+        f"Formato de CADA capítulo: {novela_shape(channel, kind)}.\n\n"
+        "Regras da novela:\n"
+        "- 2 a 4 personagens fixos na ficha; nomes e personalidades idênticos em todos os capítulos.\n"
+        f"- Cada fala tem speaker = '{narrator}' ou o nome exato de um personagem. O narrador é curto: "
+        "só situa e liga as cenas; a história avança pelos diálogos.\n"
+        "- Falas curtas e naturais, como numa novela de TV, sem rubricas nem descrições entre parênteses "
+        "(tudo o que está no texto será falado).\n"
+        "- Capítulo 1: conflito nos 2 primeiros segundos.\n"
+        f"- A partir do capítulo 2, a primeira fala é do {narrator}, com um resumo de UMA frase do anterior.\n"
+        f"- Todos os capítulos menos o último terminam numa reviravolta ou pergunta sem resposta; o título "
+        f"termina com '({part_word} N)'.\n"
+        "- O último capítulo resolve a trama com uma revelação forte.\n"
+        "- Ficção original: não copie novelas, filmes ou séries existentes. Nada de conteúdo sexual "
+        "explícito nem violência gráfica.\n"
+        "- A descrição de cada capítulo é uma legenda curta para redes sociais, terminando com 3-5 hashtags."
+    )
+    with _client().beta.messages.stream(
+        model=env().claude_model,
+        max_tokens=64000,
+        system=system_prompt(channel),
+        thinking={"type": "adaptive"},
+        output_config={"effort": "high"},
+        betas=_BETAS,
+        fallbacks="default",
+        messages=[{"role": "user", "content": prompt}],
+        output_format=NovelaSeries,
+    ) as stream:
+        resp = stream.get_final_message()
+    _check(resp)
+    novela = resp.parsed_output
+    if novela is None or len(novela.episodes) < parts:
+        raise RuntimeError(f"A novela veio com {0 if novela is None else len(novela.episodes)} de {parts} capítulos.")
+    novela.episodes = novela.episodes[:parts]
+    known = {c.name for c in novela.characters}
+    for ep in novela.episodes:  # fala de alguém fora da ficha vira narração
+        for sc in ep.scenes:
+            for ln in sc.lines:
+                if ln.speaker not in known:
+                    ln.speaker = narrator
+    return novela

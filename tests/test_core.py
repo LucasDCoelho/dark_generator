@@ -71,9 +71,12 @@ def test_update_clone_pause_delete(channel):
 def test_health_flags_problems(channel):
     from darkgen import db, service
 
+    h = service.channel_health(channel["id"], check_token=False)  # modo manual: YouTube é opcional
+    assert next(i for i in h["issues"] if i["code"] == "not_connected")["severity"] == "info"
+    service.update_channel(channel["id"], settings={"publish_mode": "youtube_api"})
     h = service.channel_health(channel["id"], check_token=False)
     codes = {i["code"] for i in h["issues"]}
-    assert "not_connected" in codes and h["status"] == "critical"
+    assert "not_connected" in codes and "no_client_secret" in codes and h["status"] == "critical"
     assert "no_claude" in codes  # piloto automático ligado sem chave
 
     db.create_video(channel["id"], "short", status="failed", error="x")
@@ -163,14 +166,17 @@ def test_subtitle_chunks_and_channel_color(tmp_path):
 
 
 def test_scene_times_cover_full_duration():
-    from darkgen.media.render import scene_times
-    from darkgen.media.tts import _even_words
+    from darkgen.media.render import scene_times_from_segments, script_lines
+    from darkgen.media.tts import Segment
 
-    scenes = [{"narration": "um dois três"}, {"narration": "quatro cinco"}, {"narration": "seis"}]
-    times = scene_times(scenes, _even_words("um dois três quatro cinco seis", 6.0), 7.0)
-    assert times[0][0] == 0 and times[-1][1] == 7.0
-    for (a0, a1), (b0, _) in zip(times, times[1:]):
-        assert a1 == b0 and a1 > a0
+    scenes = [{"narration": "um dois três"}, {"lines": [{"speaker": "A", "text": "quatro"}, {"speaker": "B", "text": "cinco"}]},
+              {"narration": "seis"}]
+    raw = script_lines(scenes)
+    assert [(sc, sp) for sc, sp, _ in raw] == [(0, "NARRADOR"), (1, "A"), (1, "B"), (2, "NARRADOR")]
+    segs = [Segment(sp, i * 2.0, i * 2.0 + 1.5, i) for i, (_, sp, _) in enumerate(raw)]
+    times = scene_times_from_segments(3, [sc for sc, _, _ in raw], segs, 9.0)
+    assert times[0][0] == 0 and times[-1][1] == 9.0
+    assert times == [(0.0, 2.0), (2.0, 6.0), (6.0, 9.0)]
 
 
 # ---------------------------------------------------------------- fila e vídeos

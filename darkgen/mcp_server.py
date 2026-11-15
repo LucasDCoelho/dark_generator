@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
-from . import db, pipeline, service, trends
+from . import db, pipeline, publishing, service, trends
 from .content.writer import script_shape
 from .scheduling import best_times as bt
 
@@ -30,6 +30,10 @@ no YouTube e conecta aqui.
 Produzir: script_guidelines → list_recent_topics → create_video com o roteiro em `scenes` (ou só tema,
 se o servidor tiver Claude API) → o worker renderiza e agenda no melhor horário do canal.
 Manutenção: channel_health (sem channel_id = todos) mostra problemas e a ação sugerida para cada um.
+Mininovelas (TikTok/Kwai/Reels/Shorts): create_novela (servidor escreve) ou create_series_from_script
+com `characters` + cenas com `lines` (você escreve) — cada personagem ganha uma voz fixa (ElevenLabs).
+Publicação manual (padrão, publish_mode=manual): list_ready_to_post → get_post_kit (MP4 + legenda de cada
+rede) → o usuário posta pelo celular → mark_posted → update_post_stats → platform_stats.
 Séries em partes (formato que mais prende): create_series (Claude no servidor escreve) ou
 create_series_from_script (você escreve todos os episódios) — episódios saem em dias seguidos, em ordem,
 com gancho entre as partes, link para a parte anterior e playlist. auto_series no canal automatiza.
@@ -54,17 +58,31 @@ def tool():
     return deco
 
 
+class LineIn(BaseModel):
+    speaker: str = Field(description="'NARRADOR' ou o nome exato de um personagem de `characters`.")
+    text: str = Field(description="Fala curta e natural (tudo é falado: sem rubricas entre parênteses).")
+
+
+class SceneIn(BaseModel):
+    narration: str | None = Field(default=None, description="Texto narrado (cena narrada). Use OU narration OU lines.")
+    lines: list[LineIn] | None = Field(default=None, description="Falas da cena (novela).")
+    visual_query: str = Field(description="2-4 palavras em inglês para buscar vídeo de fundo, ex.: 'abandoned hospital'.")
+
+
 class EpisodeIn(BaseModel):
     title: str = Field(description="Título do episódio terminando com '(Parte N)' / '(Part N)'.")
-    scenes: list["SceneIn"]
+    scenes: list[SceneIn]
     description: str = ""
     tags: list[str] = []
     thumbnail_text: str = ""
 
 
-class SceneIn(BaseModel):
-    narration: str = Field(description="Texto narrado nesta cena, no idioma do canal, linguagem falada.")
-    visual_query: str = Field(description="2-4 palavras em inglês para buscar vídeo de fundo, ex.: 'abandoned hospital'.")
+class CharacterIn(BaseModel):
+    name: str
+    gender: Literal["male", "female"]
+    age: str = ""
+    role: str = ""
+    personality: str = ""
 
 
 def _summ(v: dict | None) -> dict:
@@ -227,7 +245,7 @@ def create_video(
     `scheduled_at` ('AAAA-MM-DD HH:MM', fuso do canal) é opcional; sem ele usa o próximo melhor horário."""
     v = service.create_video(
         channel_id, kind, topic=topic, title=title, description=description, tags=tags,
-        scenes=[s.model_dump() for s in scenes] if scenes else None,
+        scenes=[s.model_dump(exclude_none=True) for s in scenes] if scenes else None,
         thumbnail_text=thumbnail_text, is_fiction=is_fiction, scheduled_at=scheduled_at,
         sources=sources, category=category,
     )
@@ -269,7 +287,7 @@ def update_video(
     """Edita um vídeo que ainda não foi enviado. Trocar `scenes` força nova renderização."""
     return _summ(service.update_video(
         video_id, title=title, description=description, tags=tags, thumbnail_text=thumbnail_text,
-        scheduled_at=scheduled_at, scenes=[s.model_dump() for s in scenes] if scenes else None,
+        scheduled_at=scheduled_at, scenes=[s.model_dump(exclude_none=True) for s in scenes] if scenes else None,
     ))
 
 
@@ -377,11 +395,27 @@ def create_series(
     angle: str | None = None,
     is_fiction: bool = False,
     start_date: str | None = None,
+    format: Literal["narrated", "novela"] | None = None,
 ) -> dict:
     """Cria uma série em partes que o servidor escreve com a API do Claude (pesquisa + todos os episódios
     de uma vez, com gancho no fim de cada parte). Os horários são reservados na hora: um episódio por dia,
-    nos melhores horários, a partir de `start_date` (AAAA-MM-DD; padrão hoje). Sem topic, o Claude escolhe."""
-    return service.create_series(channel_id, parts, kind, topic, angle, is_fiction, start_date)
+    nos melhores horários, a partir de `start_date` (AAAA-MM-DD; padrão hoje). Sem topic, o Claude escolhe.
+    format: narrated (narrador) ou novela (personagens e diálogos); padrão = series_format do canal."""
+    return service.create_series(channel_id, parts, kind, topic, angle, is_fiction, start_date, format)
+
+
+@tool()
+def create_novela(
+    channel_id: int,
+    parts: int = 5,
+    premise: str | None = None,
+    kind: Literal["short", "long"] = "short",
+    start_date: str | None = None,
+) -> dict:
+    """Cria uma mininovela (ficção) que o servidor escreve com a API do Claude: ficha de 2-4 personagens,
+    capítulos de 61-110s com diálogos, cada personagem com voz fixa (ElevenLabs), letreiro 'Parte N' e
+    'Continua na parte N+1'. Sem premise, o Claude cria uma no estilo do canal."""
+    return service.create_series(channel_id, parts, kind, premise, None, True, start_date, "novela")
 
 
 @tool()
@@ -394,12 +428,15 @@ def create_series_from_script(
     is_fiction: bool = False,
     sources: list[str] | None = None,
     start_date: str | None = None,
+    characters: list[CharacterIn] | None = None,
 ) -> dict:
-    """Cria uma série com os episódios já escritos (não precisa de API key no servidor). Regras: a partir
+    """Cria uma série com os episódios já escritos (cenas com `narration`, ou com `lines` + `characters`
+    para mininovela, em que cada personagem ganha uma voz fixa) (não precisa de API key no servidor). Regras: a partir
     da parte 2, a 1ª cena resume a anterior em uma frase; todas menos a última terminam com cliffhanger;
     nomes e fatos idênticos entre as partes. Veja script_guidelines para o tamanho de cada episódio."""
     return service.create_series_from_script(
-        channel_id, title, [e.model_dump() for e in episodes], kind, logline, is_fiction, sources, start_date)
+        channel_id, title, [e.model_dump(exclude_none=True) for e in episodes], kind, logline, is_fiction, sources,
+        start_date, [c.model_dump() for c in characters] if characters else None)
 
 
 @tool()
@@ -430,6 +467,68 @@ def cancel_series(series_id: int) -> dict:
     if not s:
         raise ValueError("Série não encontrada.")
     return service.series_summary(s)
+
+
+# ================================================================ publicação manual nas redes
+
+@tool()
+def list_ready_to_post(channel_id: int | None = None, limit: int = 20) -> list[dict]:
+    """Fila 'Pronto para postar': vídeos renderizados com link do MP4 e legenda pronta para cada rede
+    (TikTok, Kwai, Instagram Reels, YouTube Shorts), na ordem sugerida. Inclui os parcialmente postados."""
+    return publishing.ready_queue(channel_id, limit)
+
+
+@tool()
+def get_post_kit(video_id: int) -> dict:
+    """Kit de postagem de um vídeo: link de download, legenda/hashtags por rede, lembrete do rótulo de IA
+    e onde já foi postado."""
+    return publishing.post_kit(video_id)
+
+
+@tool()
+def mark_posted(
+    video_id: int,
+    platform: Literal["tiktok", "kwai", "instagram", "youtube"],
+    url: str | None = None,
+    posted_at: str | None = None,
+) -> dict:
+    """Registra que o vídeo foi postado numa rede (com o link, se tiver)."""
+    return publishing.mark_posted(video_id, platform, url, posted_at)
+
+
+@tool()
+def unmark_posted(video_id: int, platform: Literal["tiktok", "kwai", "instagram", "youtube"]) -> dict:
+    """Desfaz uma marcação de postagem feita por engano."""
+    return publishing.unmark_posted(video_id, platform)
+
+
+@tool()
+def update_post_stats(
+    video_id: int,
+    platform: Literal["tiktok", "kwai", "instagram", "youtube"],
+    views: int | None = None,
+    likes: int | None = None,
+    comments: int | None = None,
+    shares: int | None = None,
+) -> dict:
+    """Anota as estatísticas de uma postagem (essas redes não têm API aberta de métricas)."""
+    return publishing.update_stats(video_id, platform, views, likes, comments, shares)
+
+
+@tool()
+def platform_stats(channel_id: int | None = None) -> dict:
+    """Compara plataformas (views médias por postagem) e séries/novelas (views por capítulo e quanto do
+    público da parte 1 chega à última) a partir das estatísticas anotadas."""
+    return publishing.platform_stats(channel_id)
+
+
+@tool()
+def list_elevenlabs_voices(search: str | None = None) -> list[dict]:
+    """Vozes disponíveis na conta ElevenLabs (id, nome, gênero, idade, sotaque, idiomas, prévia), para
+    configurar eleven_narrator_voice / eleven_male_voices / eleven_female_voices com update_channel."""
+    from .media.tts import list_eleven_voices
+
+    return list_eleven_voices(search)
 
 
 # ================================================================ tendências

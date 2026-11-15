@@ -1,6 +1,7 @@
-# Dark Generator — gerenciador de canais dark
+# Dark Generator — gerenciador de canais dark e mininovelas
 
-Gerencie **vários canais dark** no YouTube (vídeos longos e **Shorts**) a partir de um só lugar:
+Produza **mininovelas e conteúdo dark** para **TikTok, Kwai, Instagram Reels e YouTube Shorts**
+(e vídeos longos no YouTube) e gerencie **vários canais** a partir de um só lugar:
 cada canal com seu nicho, idioma, voz, público e agenda; produção e publicação diárias nos
 melhores horários; manutenção de tudo **via MCP** (Claude) ou pelo **painel web**.
 
@@ -9,6 +10,21 @@ melhores horários; manutenção de tudo **via MCP** (Claude) ou pelo **painel w
  Claude (MCP) / painel ─┼─ Canal B (en-US, unsolved)     ─┼─ worker único → roteiro → narração → vídeo → upload agendado
                        └─ Canal C (pt-BR, contos terror) ─┘      prioriza o vídeo com horário mais próximo
 ```
+
+## Começo rápido: mininovelas em todas as redes
+
+1. Defina `ELEVENLABS_API_KEY` (vozes naturais) e, se quiser o piloto automático, `ANTHROPIC_API_KEY`.
+2. Crie um canal com o modelo **Mininovela de suspense** ou **Mininovela de drama**: capítulos de
+   61–110s (o TikTok só paga vídeos com mais de 1 minuto), 2–4 personagens fixos, uma voz da
+   ElevenLabs por personagem, letreiros "PARTE N" e "CONTINUA NA PARTE N+1".
+3. O piloto automático escreve uma novela nova a cada poucos dias; ou peça ao Claude via MCP:
+   *"crie uma mininovela de 5 capítulos sobre uma herança maldita"* (`create_novela`).
+4. Abra **Pronto para postar** no celular: baixe o MP4, copie a legenda de cada rede (TikTok,
+   Kwai, Reels, Shorts), ative o rótulo de IA, poste e marque como postado. Anote as views depois
+   para o sistema comparar redes e novelas.
+
+> Por que manual? TikTok e YouTube só liberam postagem pública por API depois de auditar o app,
+> e o Kwai não tem API de postagem. Postando pelo app, o vídeo sai público na hora em todas.
 
 ## O que ele faz
 
@@ -21,7 +37,13 @@ melhores horários; manutenção de tudo **via MCP** (Claude) ou pelo **painel w
   costumam ter RPM bem maior.
 - **Roteiros com Claude** (`claude-opus-5-5`) no idioma e estilo do canal, com pesquisa na web
   para casos reais (fontes na descrição). Ou o próprio Claude escreve via MCP, sem API key.
-- **Vídeo pronto**: narração (edge-tts), legendas palavra a palavra na cor do canal, fundos
+- **Mininovelas**: ficha de personagens, diálogos, uma voz fixa por personagem (ElevenLabs), nome de
+  quem fala na tela, letreiros de capítulo e duração mínima configurável (61s para o TikTok).
+- **Publicação manual multiplataforma** (padrão): fila "Pronto para postar" com download do MP4 e
+  legenda/hashtags no formato de cada rede, lembrete do rótulo de IA, registro de onde foi postado e
+  das views — com comparação por rede e retenção entre capítulos. Upload automático no YouTube
+  continua disponível (`publish_mode = youtube_api`) para quando a auditoria da API sair.
+- **Vídeo pronto**: voz (ElevenLabs ou edge-tts), legendas palavra a palavra na cor do canal, fundos
   Pexels com color grading sombrio (ou procedurais), trilha com *ducking*, -14 LUFS, thumbnail.
 - **Séries em partes automáticas**: o Claude escreve todos os episódios de uma vez (mesma história,
   nomes e fatos), cada parte termina com gancho e a seguinte abre com um resumo rápido. Os episódios
@@ -65,6 +87,7 @@ docker run -d --name darkgen -p 8000:8000 -v $PWD/data:/data --env-file .env dar
 | Variável | Para quê |
 |---|---|
 | `ANTHROPIC_API_KEY` | Piloto automático (ideias, pesquisa, roteiros). Opcional se os roteiros vierem via MCP. |
+| `ELEVENLABS_API_KEY` | Vozes naturais (narrador + uma voz por personagem). Sem ela, usa edge-tts gratuito. |
 | `PEXELS_API_KEY` | Vídeos reais de fundo (opcional). |
 | `DASHBOARD_TOKEN` | Protege painel/API/MCP fora do localhost. |
 | `PUBLIC_BASE_URL` | URL pública (callback OAuth e links gerados pelo MCP) em servidor remoto. |
@@ -119,7 +142,7 @@ O YouTube **não permite criar canais pela API**. O fluxo é:
 
 > O modo stdio grava na fila e consulta o estado; quem renderiza e envia é o `serve`.
 
-### Ferramentas MCP (42)
+### Ferramentas MCP (50)
 
 | Grupo | Ferramentas |
 |---|---|
@@ -128,6 +151,8 @@ O YouTube **não permite criar canais pela API**. O fluxo é:
 | **Manutenção** | `channel_health`, `retry_failed`, `retry_video`, `rerender_video`, `cleanup_files`, `activity_log`, `refresh_stats` |
 | **Conteúdo** | `script_guidelines`, `list_recent_topics`, `create_video`, `list_videos`, `get_video`, `update_video`, `move_video`, `approve_video`, `delete_video` |
 | **Agenda e dados** | `best_times`, `plan_schedule`, `analytics` |
+| **Mininovelas** | `create_novela`, `create_series_from_script` (com `characters` e cenas com `lines`), `list_elevenlabs_voices` |
+| **Postagem manual** | `list_ready_to_post`, `get_post_kit`, `mark_posted`, `unmark_posted`, `update_post_stats`, `platform_stats` |
 | **Séries** | `create_series`, `create_series_from_script`, `list_series`, `get_series`, `retry_series`, `cancel_series` |
 | **Tendências** | `scan_youtube_trends`, `scan_social_trends`, `list_trend_scans`, `get_trend_scan`, `compare_trend_scans` |
 
@@ -172,6 +197,17 @@ Atualizando da versão de canal único: o banco é migrado automaticamente na pr
 - Modelos com séries automáticas ligadas: contos de terror, sobreviventes e liminal (EN). Em
   qualquer canal: Configurações do canal → “Séries automáticas”.
 
+## Vozes (ElevenLabs)
+
+- Cada fala é gerada com a voz do personagem e o resultado fica em cache: renderizar de novo não
+  gasta créditos.
+- As vozes padrão são vozes prontas da ElevenLabs em inglês; o modelo multilíngue fala português
+  com elas, mas o sotaque fica melhor com **vozes brasileiras**: adicione-as à sua conta pela Voice
+  Library e escolha em Configurações do canal → Voz → "Escolher vozes da minha conta" (ou
+  `list_elevenlabs_voices` + `update_channel` via MCP).
+- Modelos: Multilingual v2 (padrão, estável), v3 (mais expressivo), Turbo/Flash v2.5 (mais baratos).
+- A ElevenLabs cobra por caractere: um capítulo de ~200 palavras tem ~1.100 caracteres.
+
 ## Como funciona a agenda
 
 - Horários no **fuso do público de cada canal**. Shorts: picos às 12h e 19h–22h (fim de semana a
@@ -198,10 +234,11 @@ darkgen/
   config.py            variáveis de ambiente, padrões por canal e modelos de nicho
   db.py                SQLite: canais, vídeos, estado, atividade (+ migração da v1)
   content/writer.py    Claude: ideias, pesquisa na web, roteiro no idioma/estilo do canal
-  media/               tts.py, subtitles.py, visuals.py, render.py (ffmpeg)
+  media/               tts.py (ElevenLabs/edge), voices.py, subtitles.py, visuals.py, render.py (ffmpeg)
   youtube/client.py    OAuth por canal, upload com publishAt, estatísticas, erros de cota
   scheduling/          melhores horários por canal (curva base + adaptação)
-  pipeline.py          worker multi-canal, séries, cota por projeto, planejador, estatísticas
+  pipeline.py          worker multi-canal, séries/novelas, cota por projeto, planejador, estatísticas
+  publishing.py        fila "Pronto para postar", legendas por rede, postagens e números por plataforma
   service.py           canais, portfólio, saúde, vídeos (compartilhado por painel e MCP)
   trends.py            scanner de tendências (YouTube Data API + pesquisa web das redes)
   mcp_server.py        servidor MCP

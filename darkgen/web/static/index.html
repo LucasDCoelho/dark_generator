@@ -13,6 +13,7 @@
     <nav class="nav-global">
       <a href="#portfolio" data-page="portfolio">Portfólio</a>
       <a href="#videos" data-page="videos-all">Todos os vídeos</a>
+      <a href="#post" data-page="post">Pronto para postar <span class="count" id="nav-post-count"></span></a>
       <a href="#trends" data-page="trends">Tendências</a>
       <a href="#new-channel" data-page="new-channel">+ Novo canal</a>
     </nav>
@@ -63,6 +64,15 @@
         <h2>Atividade de todos os canais</h2>
         <ul class="feed" id="pf-feed"></ul>
       </div>
+    </section>
+
+    <!-- PRONTO PARA POSTAR -->
+    <section class="page" id="page-post" hidden>
+      <header class="page-head">
+        <div><h1>Pronto para postar</h1><p class="muted">Baixe o vídeo, copie a legenda de cada rede, poste pelo celular e marque aqui <span id="post-count"></span></p></div>
+        <div class="actions"><select id="post-channel" aria-label="Canal"></select></div>
+      </header>
+      <div id="post-list" class="post-list"></div>
     </section>
 
     <!-- TENDÊNCIAS -->
@@ -248,7 +258,8 @@
             <label>Formato <select name="kind"><option value="short">Shorts</option><option value="long">Longos</option></select></label>
             <label>Começa em <span class="muted">(vazio = hoje)</span><input type="date" name="start_date"></label>
           </div>
-          <label>Tema <span class="muted">(vazio = Claude escolhe um tema com história para várias partes)</span><input name="topic" placeholder="Ex.: O desaparecimento do voo 19"></label>
+          <label>Tipo <select name="fmt"><option value="">Padrão do canal</option><option value="novela">Mininovela (personagens e diálogos)</option><option value="narrated">Narrada (narrador)</option></select></label>
+          <label>Tema / premissa <span class="muted">(vazio = Claude escolhe um tema com história para várias partes)</span><input name="topic" placeholder="Ex.: O desaparecimento do voo 19"></label>
           <label>Enfoque <span class="muted">(opcional)</span><input name="angle"></label>
           <label class="check"><input type="checkbox" name="is_fiction"> É ficção / lenda</label>
           <p class="muted small">O Claude escreve todos os episódios de uma vez, com a mesma história, nomes e fatos. A partir da parte 2, o vídeo abre com um resumo rápido e a descrição traz o link da parte anterior e a playlist da série.</p>
@@ -279,6 +290,10 @@
         <div class="seg" id="perf-kind"><button data-kind="short" class="active">Shorts</button><button data-kind="long">Longos</button></div>
       </header>
       <div class="tiles" id="perf-tiles"></div>
+      <div class="grid-2">
+        <div class="card flush"><h2 class="pad">Por plataforma <span class="muted small">(números anotados)</span></h2><div id="platform-table"></div></div>
+        <div class="card flush"><h2 class="pad">Séries e novelas</h2><div id="series-stats"></div></div>
+      </div>
       <div class="card"><h2>Média de views por hora de publicação</h2><div id="perf-chart" class="chart"></div></div>
       <div class="grid-2">
         <div class="card flush"><h2 class="pad">Top 10 vídeos</h2><div id="top-table"></div></div>
@@ -323,8 +338,19 @@
           <div class="row three">
             <label>Partes por série <input type="number" name="series_parts" min="2" max="10"></label>
             <label>Nova série a cada (dias) <input type="number" name="series_every_days" min="1" max="60"></label>
-            <label>Formato das séries <select name="series_kind"><option value="short">Shorts</option><option value="long">Longos</option></select></label>
+            <label>Formato das séries <select name="series_kind"><option value="short">Vertical (curto)</option><option value="long">Longos</option></select></label>
           </div>
+          <div class="row three">
+            <label>Tipo das séries <select name="series_format"><option value="narrated">Narrada</option><option value="novela">Mininovela</option></select></label>
+            <label>Duração mínima (s) <span class="muted">(61 = TikTok paga)</span><input type="number" name="min_duration_s" min="0" max="180"></label>
+            <label>Publicação <select name="publish_mode"><option value="manual">Manual (fila Pronto para postar)</option><option value="youtube_api">Upload automático no YouTube</option></select></label>
+          </div>
+          <fieldset class="checks"><legend class="muted small">Redes em que você posta este canal</legend>
+            <label class="check"><input type="checkbox" name="platforms" value="tiktok"> TikTok</label>
+            <label class="check"><input type="checkbox" name="platforms" value="kwai"> Kwai</label>
+            <label class="check"><input type="checkbox" name="platforms" value="instagram"> Instagram Reels</label>
+            <label class="check"><input type="checkbox" name="platforms" value="youtube"> YouTube Shorts</label>
+          </fieldset>
           <label>Nicho / linha editorial <textarea name="niche" rows="3"></textarea></label>
           <label>Estilo de narração <input name="style"></label>
           <div class="row three">
@@ -332,11 +358,32 @@
             <label>Fuso do público <input name="timezone"></label>
             <label>Categoria do YouTube (ID) <input name="category_id"></label>
           </div>
+          <h3>Voz</h3>
           <div class="row three">
-            <label>Voz (edge-tts) <input name="voice"></label>
+            <label>Provedor <select name="tts_provider"><option value="auto">Automático (ElevenLabs se houver chave)</option><option value="elevenlabs">ElevenLabs</option><option value="edge">edge-tts (grátis)</option></select></label>
+            <label>Modelo ElevenLabs <select name="eleven_model"><option value="eleven_multilingual_v2">Multilingual v2 (estável)</option><option value="eleven_v3">v3 (mais expressivo)</option><option value="eleven_turbo_v2_5">Turbo v2.5 (mais barato)</option><option value="eleven_flash_v2_5">Flash v2.5 (mais barato)</option></select></label>
+            <label>Voz do narrador (ID) <input name="eleven_narrator_voice"></label>
+          </div>
+          <div class="row">
+            <label>Vozes masculinas (IDs, vírgula) <input name="eleven_male_voices"></label>
+            <label>Vozes femininas (IDs, vírgula) <input name="eleven_female_voices"></label>
+          </div>
+          <div class="row four">
+            <label>Estabilidade <input type="number" name="eleven_stability" min="0" max="1" step="0.05"></label>
+            <label>Similaridade <input type="number" name="eleven_similarity" min="0" max="1" step="0.05"></label>
+            <label>Estilo <input type="number" name="eleven_style" min="0" max="1" step="0.05"></label>
+            <label>Velocidade <input type="number" name="eleven_speed" min="0.7" max="1.2" step="0.05"></label>
+          </div>
+          <details class="voices"><summary>Escolher vozes da minha conta ElevenLabs</summary>
+            <div class="actions"><input id="voice-search" placeholder="Buscar (ex.: brazilian, narrator)"><button type="button" class="btn" id="btn-voices">Carregar vozes</button></div>
+            <div id="voices-box"></div>
+          </details>
+          <div class="row three">
+            <label>Voz edge-tts (reserva) <input name="voice"></label>
             <label>Velocidade <input name="voice_rate"></label>
             <label>Tom <input name="voice_pitch"></label>
           </div>
+          <label>Voz feminina edge-tts (reserva) <input name="edge_female_voice"></label>
           <div class="row three">
             <label>Tags padrão <span class="muted">(vírgula)</span><input name="default_tags"></label>
             <label>Categorias de conteúdo <span class="muted">(vírgula)</span><input name="content_mix"></label>

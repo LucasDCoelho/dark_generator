@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from .. import db, pipeline, service, trends
+from .. import db, pipeline, publishing, service, trends
 from ..config import env
 from ..mcp_server import mcp
 from ..scheduling import best_times
@@ -127,6 +127,19 @@ class SeriesIn(BaseModel):
     angle: str | None = None
     is_fiction: bool = False
     start_date: str | None = None
+    fmt: Literal["narrated", "novela"] | None = None
+
+
+class PostedIn(BaseModel):
+    platform: Literal["tiktok", "kwai", "instagram", "youtube"]
+    url: str | None = None
+
+
+class PostStatsIn(BaseModel):
+    views: int | None = None
+    likes: int | None = None
+    comments: int | None = None
+    shares: int | None = None
 
 
 class YouTubeScanIn(BaseModel):
@@ -425,12 +438,53 @@ def create_app(start_scheduler: bool = True) -> FastAPI:
         return {"ok": True}
 
     @app.get("/media/{video_id}/{what}")
-    def media(video_id: int, what: Literal["video", "thumb"]):
+    def media(video_id: int, what: Literal["video", "thumb"], download: bool = False):
         v = db.get_video(video_id)
         path = v and v.get("video_path" if what == "video" else "thumb_path")
         if not path or not Path(path).exists():
             raise HTTPException(404, "Arquivo não encontrado")
+        if download:
+            import re as _re
+            import unicodedata
+
+            base = unicodedata.normalize("NFKD", v.get("title") or f"video-{video_id}").encode("ascii", "ignore").decode()
+            slug = _re.sub(r"[^a-zA-Z0-9]+", "-", base).strip("-").lower()[:60] or f"video-{video_id}"
+            return FileResponse(path, filename=f"{slug}{Path(path).suffix}")
         return FileResponse(path)
+
+    # ---------- publicação manual
+    @app.get("/api/post-queue")
+    def post_queue(channel_id: int | None = None, limit: int = 50):
+        return publishing.ready_queue(channel_id, limit)
+
+    @app.get("/api/videos/{video_id}/post-kit")
+    def post_kit(video_id: int):
+        return publishing.post_kit(video_id)
+
+    @app.post("/api/videos/{video_id}/posted")
+    def posted(video_id: int, body: PostedIn):
+        return publishing.mark_posted(video_id, body.platform, body.url)
+
+    @app.delete("/api/videos/{video_id}/posted/{platform}")
+    def unposted(video_id: int, platform: str):
+        return publishing.unmark_posted(video_id, platform)
+
+    @app.patch("/api/videos/{video_id}/posted/{platform}")
+    def post_stats(video_id: int, platform: str, body: PostStatsIn):
+        return publishing.update_stats(video_id, platform, **body.model_dump())
+
+    @app.get("/api/platform-stats")
+    def platform_stats(channel_id: int | None = None):
+        return publishing.platform_stats(channel_id)
+
+    @app.get("/api/elevenlabs/voices")
+    def eleven_voices(search: str | None = None):
+        from ..media.tts import list_eleven_voices
+
+        try:
+            return list_eleven_voices(search)
+        except RuntimeError as e:
+            raise HTTPException(400, str(e)) from e
 
     # ---------- painel
     @app.get("/", include_in_schema=False)

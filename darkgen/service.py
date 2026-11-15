@@ -65,6 +65,7 @@ def video_summary(v: dict, channel: dict | None = None) -> dict:
         "approved": v.get("approved"),
         "error": v.get("error"),
         "series_id": v.get("series_id"),
+        "posted_on": [p["platform"] for p in db.postings_for(v["id"])] if v["status"] == "published" else [],
         "episode": v.get("episode"),
     }
 
@@ -176,11 +177,15 @@ def channel_health(channel_id: int, check_token: bool = True) -> dict:
 
     if not ch["active"]:
         add("info", "paused", "Canal pausado: nada é produzido nem enviado.", "update_channel(active=true)")
+    # A conexão com o YouTube só é obrigatória no upload automático; no modo manual você posta pelo app.
+    yt_needed = ch["settings"]["publish_mode"] == "youtube_api"
+    yt_sev = "critical" if yt_needed else "info"
     if not yt.has_token(channel_id):
-        add("critical", "not_connected", "YouTube não conectado.", "connect_youtube → abrir o link")
+        add(yt_sev, "not_connected", "YouTube não conectado." + ("" if yt_needed else " (opcional no modo manual; serve para estatísticas)"),
+            "connect_youtube → abrir o link")
     elif check_token and not yt.is_connected(channel_id):
-        add("critical", "token_invalid", "Token do YouTube expirou ou foi revogado.", "connect_youtube → reconectar")
-    if not yt.client_secret_for(channel_id):
+        add(yt_sev, "token_invalid", "Token do YouTube expirou ou foi revogado.", "connect_youtube → reconectar")
+    if yt_needed and not yt.client_secret_for(channel_id):
         add("critical", "no_client_secret", "Nenhum client_secret.json (global ou do canal).", "enviar pelo painel")
 
     counts = db.status_counts(channel_id)
@@ -195,9 +200,22 @@ def channel_health(channel_id: int, check_token: bool = True) -> dict:
         add("warning", "awaiting_approval", f"{len(awaiting)} vídeo(s) aguardando aprovação.", "approve_video(video_id)")
 
     now = datetime.now(timezone.utc)
+    if s["publish_mode"] == "manual":
+        overdue = [v for v in db.list_videos(status="ready", channel_id=channel_id, limit=500)
+                   if v.get("scheduled_at") and db.parse_iso(v["scheduled_at"]) < now - timedelta(hours=2)]
+        if overdue:
+            add("warning", "posts_overdue", f"{len(overdue)} vídeo(s) prontos passaram do horário sugerido sem postagem.",
+                "postar pela fila 'Pronto para postar' e marcar com mark_posted")
+    tts_choice = s.get("tts_provider", "auto")
+    if tts_choice == "elevenlabs" and not env().elevenlabs_api_key:
+        add("critical", "no_elevenlabs", "Canal configurado para ElevenLabs, mas ELEVENLABS_API_KEY não está definida.",
+            "definir a chave no .env ou mudar tts_provider para 'auto'")
+    elif tts_choice == "auto" and not env().elevenlabs_api_key and env().tts_provider != "silent":
+        add("info", "free_voice", "Usando voz gratuita (edge-tts). Para vozes naturais, defina ELEVENLABS_API_KEY.",
+            "configurar ELEVENLABS_API_KEY")
     late = [v for v in db.list_videos(status=["queued", "scripted", "rendered"], channel_id=channel_id, limit=500)
             if v.get("scheduled_at") and db.parse_iso(v["scheduled_at"]) < now]
-    if late:
+    if late and s["publish_mode"] == "youtube_api":
         add("warning", "late_videos", f"{len(late)} vídeo(s) passaram do horário sem ser enviados.",
             "serão reagendados automaticamente no upload; verifique worker e conexão")
 
@@ -283,6 +301,7 @@ def portfolio() -> dict:
             "subscribers": ch.get("subscribers"), "views": ch.get("views"),
             "published_7d": len(recent), "views_7d_videos": sum(v.get("views") or 0 for v in recent),
             "in_production": sum(c[s] for s in db.IN_PRODUCTION), "scheduled": c["scheduled"],
+            "ready_to_post": c["ready"], "publish_mode": ch["settings"]["publish_mode"],
             "published": c["published"], "failed": c["failed"],
             "next_publication": _local(ch, nxt[0]["scheduled_at"]) if nxt and nxt[0].get("scheduled_at") else None,
             "last_publication": last.astimezone(tz_of(ch)).strftime("%Y-%m-%d %H:%M") if last else None,
@@ -299,6 +318,7 @@ def portfolio() -> dict:
         "scheduled": sum(r["scheduled"] for r in rows),
         "published_7d": sum(r["published_7d"] for r in rows),
         "failed": sum(r["failed"] for r in rows),
+        "ready_to_post": sum(r["ready_to_post"] for r in rows),
         "daily_videos": sum(r["daily_quota"] for r in rows if r["active"]),
         "needs_attention": sum(1 for r in rows if r["health"] != "ok"),
     }
@@ -332,13 +352,31 @@ def overview(channel_id: int) -> dict:
 
 # ---------------------------------------------------------------- vídeos
 
-def _validate_scenes(scenes: list[dict]) -> list[dict]:
+def _validate_scenes(scenes: list[dict], speakers: set[str] | None = None) -> list[dict]:
+    """Cena narrada ({narration}) ou de novela ({lines: [{speaker, text}]})."""
+    from .media.voices import is_narrator
+
     out = []
     for i, s in enumerate(scenes or []):
+        visual = (s.get("visual_query") or "dark atmosphere").strip()
+        if s.get("lines"):
+            lines = []
+            for ln in s["lines"]:
+                text = (ln.get("text") or "").strip()
+                speaker = (ln.get("speaker") or "NARRADOR").strip()
+                if not text:
+                    continue
+                if speakers is not None and not is_narrator(speaker) and speaker not in speakers:
+                    raise ServiceError(f"Cena {i + 1}: '{speaker}' não está na lista de personagens.")
+                lines.append({"speaker": speaker, "text": text})
+            if not lines:
+                raise ServiceError(f"Cena {i + 1} sem falas.")
+            out.append({"lines": lines, "visual_query": visual})
+            continue
         text = (s.get("narration") or "").strip()
         if not text:
             raise ServiceError(f"Cena {i + 1} sem narração.")
-        out.append({"narration": text, "visual_query": (s.get("visual_query") or "dark atmosphere").strip()})
+        out.append({"narration": text, "visual_query": visual})
     return out
 
 
@@ -419,10 +457,15 @@ def move_video(video_id: int, channel_id: int) -> dict:
 
 
 def approve(video_id: int) -> dict:
-    if not db.get_video(video_id):
+    v = db.get_video(video_id)
+    if not v:
         raise ServiceError("Vídeo não encontrado.")
     db.log("Aprovado para publicação", video_id=video_id)
-    return db.update_video(video_id, approved=True)  # type: ignore[return-value]
+    fields: dict = {"approved": True}
+    ch = db.get_channel(v["channel_id"])
+    if v["status"] == "rendered" and ch and ch["settings"]["publish_mode"] == "manual":
+        fields["status"] = "ready"
+    return db.update_video(video_id, **fields)  # type: ignore[return-value]
 
 
 # ---------------------------------------------------------------- desempenho e horários
@@ -500,6 +543,7 @@ def env_status() -> dict:
     return {
         "anthropic_key": pipeline.has_claude(),
         "pexels_key": bool(env().pexels_api_key),
+        "elevenlabs_key": bool(env().elevenlabs_api_key),
         "tts_provider": env().tts_provider,
         "model": env().claude_model,
         "data_dir": str(env().data_dir.resolve()),
@@ -545,13 +589,14 @@ def _start_day(ch: dict, start_date: str | None):
 
 
 def create_series(channel_id: int, parts: int = 3, kind: str = "short", topic: str | None = None,
-                  angle: str | None = None, is_fiction: bool = False, start_date: str | None = None) -> dict:
-    """Série escrita pelo servidor (Claude API). Horários reservados na hora."""
+                  angle: str | None = None, is_fiction: bool = False, start_date: str | None = None,
+                  fmt: str | None = None) -> dict:
+    """Série escrita pelo servidor (Claude API). Horários reservados na hora. fmt: narrated | novela."""
     ch = require_channel(channel_id)
     if not pipeline.has_claude():
         raise ServiceError("Sem ANTHROPIC_API_KEY no servidor: use create_series_from_script com os episódios prontos.")
     try:
-        srs = pipeline.create_series_plan(ch, parts, kind, topic, angle, is_fiction, _start_day(ch, start_date))
+        srs = pipeline.create_series_plan(ch, parts, kind, topic, angle, is_fiction, _start_day(ch, start_date), fmt)
     except ValueError as e:
         raise ServiceError(str(e)) from e
     return series_summary(srs)
@@ -559,23 +604,26 @@ def create_series(channel_id: int, parts: int = 3, kind: str = "short", topic: s
 
 def create_series_from_script(channel_id: int, title: str, episodes: list[dict], kind: str = "short",
                               logline: str = "", is_fiction: bool = False, sources: list[str] | None = None,
-                              start_date: str | None = None) -> dict:
-    """Série com roteiros prontos (ex.: escritos pelo Claude via MCP)."""
+                              start_date: str | None = None, characters: list[dict] | None = None) -> dict:
+    """Série com roteiros prontos (ex.: escritos pelo Claude via MCP). Com `characters` vira novela
+    (cada personagem ganha uma voz fixa)."""
     ch = require_channel(channel_id)
     if not title:
         raise ServiceError("Informe o título da série.")
     if len(episodes) < 2:
         raise ServiceError("Uma série precisa de pelo menos 2 episódios.")
+    names = {c["name"] for c in characters or [] if c.get("name")} if characters else None
     clean = []
     for i, ep in enumerate(episodes, start=1):
         if not ep.get("title"):
             raise ServiceError(f"Episódio {i} sem título.")
-        clean.append({**ep, "scenes": _validate_scenes(ep.get("scenes") or [])})
+        clean.append({**ep, "scenes": _validate_scenes(ep.get("scenes") or [], names)})
+    fmt = "novela" if characters else "narrated"
     try:
-        srs = pipeline.create_series_plan(ch, len(clean), kind, title, None, is_fiction, _start_day(ch, start_date))
+        srs = pipeline.create_series_plan(ch, len(clean), kind, title, None, is_fiction, _start_day(ch, start_date), fmt)
     except ValueError as e:
         raise ServiceError(str(e)) from e
-    pipeline.fill_series(srs, ch, title, logline, clean, is_fiction, sources)
+    pipeline.fill_series(srs, ch, title, logline, clean, is_fiction or bool(characters), sources, characters)
     return series_summary(db.get_series(srs["id"]))
 
 
