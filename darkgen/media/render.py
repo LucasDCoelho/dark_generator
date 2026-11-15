@@ -113,7 +113,7 @@ def render_video(video: dict, settings: dict, workdir: Path) -> RenderResult:
     log.info("Narração: %.1fs, %d palavras", narration.duration, len(narration.words))
 
     # 2) legendas
-    subtitles.build_ass(narration.words, workdir / "subs.ass", kind)
+    subtitles.build_ass(narration.words, workdir / "subs.ass", kind, settings.get("subtitle_color", "#FF4B4B"))
 
     # 3) segmentos visuais por cena
     used: set[int] = set()
@@ -122,7 +122,7 @@ def render_video(video: dict, settings: dict, workdir: Path) -> RenderResult:
     for i, ((start, end), scene) in enumerate(zip(scene_times(scenes, narration.words, total), scenes)):
         src = None
         try:
-            src = visuals.search_pexels(scene.get("visual_query", "dark night"), kind, used)
+            src = visuals.search_pexels(scene.get("visual_query") or "dark night", kind, used)
         except Exception as e:  # noqa: BLE001 - visual de banco é opcional
             log.warning("Sem vídeo de banco para a cena %d: %s", i, e)
         seg = workdir / f"seg_{i:02d}.mp4"

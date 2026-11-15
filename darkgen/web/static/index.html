@@ -10,70 +10,146 @@
 <body>
   <aside class="sidebar">
     <div class="brand"><span class="dot"></span>Dark Generator</div>
-    <nav>
-      <a href="#overview" data-page="overview">Visão geral</a>
-      <a href="#videos" data-page="videos">Vídeos</a>
-      <a href="#new" data-page="new">Criar vídeo</a>
-      <a href="#times" data-page="times">Horários</a>
-      <a href="#analytics" data-page="analytics">Desempenho</a>
-      <a href="#config" data-page="config">Configurações</a>
+    <nav class="nav-global">
+      <a href="#portfolio" data-page="portfolio">Portfólio</a>
+      <a href="#videos" data-page="videos-all">Todos os vídeos</a>
+      <a href="#new-channel" data-page="new-channel">+ Novo canal</a>
+    </nav>
+    <div class="channel-picker">
+      <label for="channel-select" class="muted small">Canal</label>
+      <select id="channel-select"></select>
+    </div>
+    <nav class="nav-channel" id="nav-channel">
+      <a data-sub="overview">Visão geral</a>
+      <a data-sub="videos">Vídeos</a>
+      <a data-sub="new">Criar vídeo</a>
+      <a data-sub="times">Horários</a>
+      <a data-sub="analytics">Desempenho</a>
+      <a data-sub="config">Configurações do canal</a>
+    </nav>
+    <nav class="nav-global bottom">
+      <a href="#settings" data-page="settings">Configurações gerais</a>
     </nav>
     <div class="side-status" id="side-status"></div>
   </aside>
 
   <main id="main">
-    <!-- VISÃO GERAL -->
-    <section class="page" id="page-overview">
+    <!-- PORTFÓLIO -->
+    <section class="page" id="page-portfolio">
       <header class="page-head">
-        <div>
-          <h1 id="ch-title">Visão geral</h1>
-          <p class="muted" id="ch-sub">Status do canal e da produção</p>
-        </div>
+        <div><h1>Portfólio de canais</h1><p class="muted">Todos os canais, saúde e produção</p></div>
         <div class="actions">
-          <button class="btn" id="btn-refresh-stats">Atualizar estatísticas</button>
-          <button class="btn primary" id="btn-plan">Planejar agenda agora</button>
+          <button class="btn" id="btn-refresh-all">Atualizar estatísticas</button>
+          <button class="btn" id="btn-plan-all">Planejar todos</button>
+          <a class="btn primary" href="#new-channel">+ Novo canal</a>
         </div>
       </header>
-      <div class="chips" id="status-chips"></div>
-      <div class="tiles" id="kpis"></div>
+      <div class="chips" id="pf-chips"></div>
+      <div class="tiles" id="pf-tiles"></div>
+      <div class="channel-grid" id="pf-channels"></div>
       <div class="grid-2">
         <div class="card">
-          <h2>Próximas publicações</h2>
-          <div id="upcoming"></div>
+          <h2>Views médias por vídeo, por canal</h2>
+          <div id="pf-compare" class="hbars"></div>
         </div>
         <div class="card">
-          <h2>Atividade</h2>
-          <ul class="feed" id="feed"></ul>
+          <h2>Cota do YouTube por projeto <span class="muted small">(últimas 24h)</span></h2>
+          <div id="pf-quota"></div>
         </div>
       </div>
-      <div class="card" id="approval-card" hidden>
-        <h2>Aguardando sua aprovação</h2>
-        <div id="approval"></div>
+      <div class="card">
+        <h2>Atividade de todos os canais</h2>
+        <ul class="feed" id="pf-feed"></ul>
       </div>
     </section>
 
-    <!-- VÍDEOS -->
+    <!-- NOVO CANAL -->
+    <section class="page" id="page-new-channel" hidden>
+      <header class="page-head"><div><h1>Novo canal</h1><p class="muted">Escolha um modelo de nicho e ajuste o que quiser</p></div></header>
+      <div class="note">O YouTube não permite criar o canal pela API. Crie o canal no YouTube (de preferência como <em>Conta de Marca</em>), cadastre-o aqui e conecte em seguida.</div>
+      <h2>1. Modelo de nicho</h2>
+      <div class="preset-grid" id="preset-grid"></div>
+      <h2>2. Detalhes</h2>
+      <div class="card">
+        <form id="form-channel" class="form">
+          <div class="row">
+            <label>Nome do canal <input name="name" required maxlength="80" placeholder="Ex.: Arquivos Sombrios"></label>
+            <label>Idioma <input name="language" placeholder="pt-BR"></label>
+          </div>
+          <div class="row three">
+            <label>Fuso do público <input name="timezone" placeholder="America/Sao_Paulo"></label>
+            <label>Voz (edge-tts) <input name="voice"></label>
+            <label>Cor das legendas <input type="color" name="subtitle_color" value="#ff4b4b"></label>
+          </div>
+          <div class="row three">
+            <label>Shorts por dia <input type="number" name="shorts_per_day" min="0" max="6"></label>
+            <label>Longos por dia <input type="number" name="long_per_day" min="0" max="3"></label>
+            <label>Intervalo mínimo (h) <input type="number" name="min_gap_hours" min="1" max="12"></label>
+          </div>
+          <label>Nicho / linha editorial <textarea name="niche" rows="3"></textarea></label>
+          <label>Estilo de narração <input name="style"></label>
+          <label class="check"><input type="checkbox" name="approval_required" checked> Exigir minha aprovação antes do upload (recomendado no início)</label>
+          <label class="check"><input type="checkbox" name="autopilot" checked> Piloto automático</label>
+          <div class="actions"><button class="btn primary">Criar canal</button></div>
+        </form>
+      </div>
+    </section>
+
+    <!-- TODOS OS VÍDEOS -->
+    <section class="page" id="page-videos-all" hidden>
+      <header class="page-head">
+        <div><h1>Todos os vídeos</h1><p class="muted">Fila e publicações de todos os canais</p></div>
+        <div class="actions">
+          <select id="all-channel" aria-label="Canal"></select>
+          <select id="all-kind" aria-label="Tipo"><option value="">Todos os tipos</option><option value="short">Shorts</option><option value="long">Longos</option></select>
+        </div>
+      </header>
+      <div class="chips filter" id="all-status"></div>
+      <div class="card flush"><div id="all-table"></div></div>
+    </section>
+
+    <!-- CANAL: VISÃO GERAL -->
+    <section class="page" id="page-overview" hidden>
+      <header class="page-head">
+        <div><h1 class="ch-name"></h1><p class="muted" id="ov-sub"></p></div>
+        <div class="actions">
+          <button class="btn" id="btn-refresh-stats">Atualizar estatísticas</button>
+          <button class="btn primary" id="btn-plan">Planejar agenda</button>
+        </div>
+      </header>
+      <div class="chips" id="status-chips"></div>
+      <div class="card" id="health-card" hidden>
+        <h2>Manutenção</h2>
+        <ul class="issues" id="health-issues"></ul>
+      </div>
+      <div class="tiles" id="kpis"></div>
+      <div class="grid-2">
+        <div class="card"><h2>Próximas publicações</h2><div id="upcoming"></div></div>
+        <div class="card"><h2>Atividade</h2><ul class="feed" id="feed"></ul></div>
+      </div>
+      <div class="card" id="approval-card" hidden><h2>Aguardando sua aprovação</h2><div id="approval"></div></div>
+    </section>
+
+    <!-- CANAL: VÍDEOS -->
     <section class="page" id="page-videos" hidden>
       <header class="page-head">
-        <div><h1>Vídeos</h1><p class="muted">Fila de produção, agendados e publicados</p></div>
+        <div><h1 class="ch-name"></h1><p class="muted">Fila de produção, agendados e publicados</p></div>
         <div class="actions">
-          <select id="flt-kind" aria-label="Tipo">
-            <option value="">Todos os tipos</option><option value="short">Shorts</option><option value="long">Longos</option>
-          </select>
+          <select id="flt-kind" aria-label="Tipo"><option value="">Todos os tipos</option><option value="short">Shorts</option><option value="long">Longos</option></select>
+          <button class="btn" id="btn-retry-failed">Refazer falhas</button>
         </div>
       </header>
       <div class="chips filter" id="flt-status"></div>
       <div class="card flush"><div id="videos-table"></div></div>
     </section>
 
-    <!-- CRIAR -->
+    <!-- CANAL: CRIAR -->
     <section class="page" id="page-new" hidden>
-      <header class="page-head"><div><h1>Criar vídeo</h1><p class="muted">Automático (Claude escreve) ou com roteiro pronto</p></div></header>
+      <header class="page-head"><div><h1 class="ch-name"></h1><p class="muted">Criar vídeo: automático (Claude escreve) ou com roteiro pronto</p></div></header>
       <div class="tabs" role="tablist">
         <button class="tab active" data-tab="auto">Automático</button>
         <button class="tab" data-tab="manual">Roteiro pronto</button>
       </div>
-
       <div class="card tab-panel" id="tab-auto">
         <form id="form-auto" class="form">
           <div class="row">
@@ -95,16 +171,11 @@
         </form>
         <div id="ideas"></div>
       </div>
-
       <div class="card tab-panel" id="tab-manual" hidden>
         <form id="form-manual" class="form">
           <div class="row">
-            <label>Formato
-              <select name="kind"><option value="short">Short</option><option value="long">Longo</option></select>
-            </label>
-            <label>Publicar em <span class="muted">(vazio = melhor horário)</span>
-              <input type="datetime-local" name="scheduled_at">
-            </label>
+            <label>Formato <select name="kind"><option value="short">Short</option><option value="long">Longo</option></select></label>
+            <label>Publicar em <span class="muted">(vazio = melhor horário)</span><input type="datetime-local" name="scheduled_at"></label>
           </div>
           <label>Título <input name="title" maxlength="100" required></label>
           <label>Descrição <textarea name="description" rows="4"></textarea></label>
@@ -124,59 +195,51 @@
       </div>
     </section>
 
-    <!-- HORÁRIOS -->
+    <!-- CANAL: HORÁRIOS -->
     <section class="page" id="page-times" hidden>
       <header class="page-head">
-        <div><h1>Melhores horários</h1><p class="muted" id="times-sub"></p></div>
-        <div class="seg" id="times-kind">
-          <button data-kind="short" class="active">Shorts</button><button data-kind="long">Longos</button>
-        </div>
+        <div><h1 class="ch-name"></h1><p class="muted" id="times-sub"></p></div>
+        <div class="seg" id="times-kind"><button data-kind="short" class="active">Shorts</button><button data-kind="long">Longos</button></div>
       </header>
       <div class="card">
-        <h2>Potencial por dia e hora <span class="muted small">(fuso do canal)</span></h2>
+        <h2>Potencial por dia e hora <span class="muted small" id="times-tz"></span></h2>
         <div id="heatmap" class="heatmap-wrap"></div>
         <div class="legend-scale" id="heat-legend"></div>
       </div>
-      <div class="card">
-        <h2>Próximos horários livres sugeridos</h2>
-        <ul class="slots" id="next-slots"></ul>
-      </div>
+      <div class="card"><h2>Próximos horários livres sugeridos</h2><ul class="slots" id="next-slots"></ul></div>
     </section>
 
-    <!-- DESEMPENHO -->
+    <!-- CANAL: DESEMPENHO -->
     <section class="page" id="page-analytics" hidden>
       <header class="page-head">
-        <div><h1>Desempenho</h1><p class="muted">Dados dos vídeos publicados por este sistema</p></div>
-        <div class="seg" id="perf-kind">
-          <button data-kind="short" class="active">Shorts</button><button data-kind="long">Longos</button>
-        </div>
+        <div><h1 class="ch-name"></h1><p class="muted">Desempenho dos vídeos publicados por este sistema</p></div>
+        <div class="seg" id="perf-kind"><button data-kind="short" class="active">Shorts</button><button data-kind="long">Longos</button></div>
       </header>
       <div class="tiles" id="perf-tiles"></div>
-      <div class="card">
-        <h2>Média de views por hora de publicação</h2>
-        <div id="perf-chart" class="chart"></div>
-      </div>
-      <div class="card flush">
-        <h2 class="pad">Top 10 vídeos</h2>
-        <div id="top-table"></div>
+      <div class="card"><h2>Média de views por hora de publicação</h2><div id="perf-chart" class="chart"></div></div>
+      <div class="grid-2">
+        <div class="card flush"><h2 class="pad">Top 10 vídeos</h2><div id="top-table"></div></div>
+        <div class="card flush"><h2 class="pad">Por categoria</h2><div id="cat-table"></div></div>
       </div>
     </section>
 
-    <!-- CONFIGURAÇÕES -->
+    <!-- CANAL: CONFIGURAÇÕES -->
     <section class="page" id="page-config" hidden>
-      <header class="page-head"><div><h1>Configurações</h1><p class="muted">Conexões, agenda e estilo do canal</p></div></header>
+      <header class="page-head"><div><h1 class="ch-name"></h1><p class="muted">Configurações do canal</p></div></header>
       <div class="grid-2">
+        <div class="card"><h2>YouTube</h2><div id="yt-box"></div></div>
         <div class="card">
-          <h2>YouTube</h2>
-          <div id="yt-box"></div>
-        </div>
-        <div class="card">
-          <h2>Serviços</h2>
-          <div id="env-box"></div>
+          <h2>Canal</h2>
+          <form id="form-meta" class="form">
+            <label>Nome <input name="name" required></label>
+            <label>Anotações <textarea name="notes" rows="2" placeholder="Ex.: monetizado em 03/2027; foco em casos dos anos 80"></textarea></label>
+            <label class="check"><input type="checkbox" name="active"> Canal ativo (desmarque para pausar)</label>
+            <div class="actions"><button class="btn primary">Salvar</button></div>
+          </form>
         </div>
       </div>
       <div class="card">
-        <h2>Produção e agenda</h2>
+        <h2>Produção, conteúdo e voz</h2>
         <form id="form-settings" class="form">
           <div class="row three">
             <label>Shorts por dia <input type="number" name="shorts_per_day" min="0" max="6"></label>
@@ -193,17 +256,57 @@
           <label class="check"><input type="checkbox" name="research_with_web"> Pesquisar na web antes de escrever casos reais</label>
           <label class="check"><input type="checkbox" name="synthetic_media_disclosure"> Marcar como "conteúdo alterado ou sintético" no YouTube</label>
           <label>Nicho / linha editorial <textarea name="niche" rows="3"></textarea></label>
+          <label>Estilo de narração <input name="style"></label>
+          <div class="row three">
+            <label>Idioma <input name="language"></label>
+            <label>Fuso do público <input name="timezone"></label>
+            <label>Categoria do YouTube (ID) <input name="category_id"></label>
+          </div>
           <div class="row three">
             <label>Voz (edge-tts) <input name="voice"></label>
             <label>Velocidade <input name="voice_rate"></label>
             <label>Tom <input name="voice_pitch"></label>
           </div>
-          <div class="row">
+          <div class="row three">
             <label>Tags padrão <span class="muted">(vírgula)</span><input name="default_tags"></label>
             <label>Categorias de conteúdo <span class="muted">(vírgula)</span><input name="content_mix"></label>
+            <label>Cor das legendas <input type="color" name="subtitle_color"></label>
           </div>
           <div class="actions"><button class="btn primary">Salvar</button></div>
         </form>
+      </div>
+      <div class="card danger-zone">
+        <h2>Duplicar ou remover</h2>
+        <div class="row">
+          <form id="form-clone" class="form">
+            <label>Duplicar configurações em um canal novo <input name="name" placeholder="Nome do novo canal" required></label>
+            <div class="actions"><button class="btn">Duplicar canal</button></div>
+          </form>
+          <form id="form-delete" class="form">
+            <label>Remover do gerenciador <span class="muted">(não apaga nada no YouTube)</span><input name="confirm" placeholder="Digite o nome do canal"></label>
+            <div class="actions"><button class="btn danger">Remover canal</button></div>
+          </form>
+        </div>
+      </div>
+    </section>
+
+    <!-- CONFIGURAÇÕES GERAIS -->
+    <section class="page" id="page-settings" hidden>
+      <header class="page-head"><div><h1>Configurações gerais</h1><p class="muted">Chaves, credencial do Google e MCP</p></div></header>
+      <div class="grid-2">
+        <div class="card"><h2>Serviços</h2><div id="env-box"></div></div>
+        <div class="card">
+          <h2>Credencial OAuth global do Google</h2>
+          <ol class="muted" style="padding-left:18px;margin-top:0">
+            <li>No Google Cloud Console, ative a <em>YouTube Data API v3</em>.</li>
+            <li>Crie um <em>ID do cliente OAuth</em> (tipo “App para computador” ou “Aplicativo da Web” com o redirect <code id="redirect-uri"></code>).</li>
+            <li>Envie o JSON aqui. Ele vale para todos os canais que não tiverem credencial própria.</li>
+          </ol>
+          <div class="form">
+            <label>client_secret.json <span id="global-secret-badge"></span><input type="file" id="global-secret" accept=".json,application/json"></label>
+          </div>
+          <p class="muted small">A cota de uploads é por projeto do Google Cloud. Com muitos canais, envie uma credencial própria (de outro projeto) nas configurações de cada canal.</p>
+        </div>
       </div>
     </section>
   </main>

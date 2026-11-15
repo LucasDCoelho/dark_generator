@@ -1,17 +1,19 @@
-"""Geração de ideias, pesquisa e roteiros com a API do Claude."""
+"""Geração de ideias, pesquisa e roteiros com a API do Claude, conforme o perfil de cada canal."""
 
 from __future__ import annotations
 
 import logging
+
 import anthropic
 from pydantic import BaseModel, Field
 
-from ..config import env
+from ..config import env, lang_text
 
 log = logging.getLogger(__name__)
 
 # Fallback server-side: se o modelo principal recusar, a API tenta outro modelo na mesma chamada.
 _BETAS = ["server-side-fallback-2026-07-01"]
+
 
 class Idea(BaseModel):
     topic: str = Field(description="Assunto específico e pesquisável (nome do caso, lugar, data).")
@@ -26,7 +28,7 @@ class IdeaList(BaseModel):
 
 
 class Scene(BaseModel):
-    narration: str = Field(description="Trecho da narração falado nesta cena.")
+    narration: str = Field(description="Trecho da narração falado nesta cena, no idioma do canal.")
     visual_query: str = Field(
         description="2-4 palavras em INGLÊS para buscar vídeo de banco de imagens (ex.: 'foggy forest night')."
     )
@@ -50,9 +52,13 @@ def _client() -> anthropic.Anthropic:
     return anthropic.Anthropic()
 
 
-SYSTEM = """Você é roteirista-chefe de um canal dark do YouTube em português do Brasil.
-Escreve narrações envolventes, atmosféricas e precisas sobre mistérios, casos reais, lendas e
-curiosidades sombrias.
+def system_prompt(channel: dict) -> str:
+    s = channel["settings"]
+    lang = lang_text(s["language"])["name"]
+    return f"""Você é roteirista-chefe do canal dark do YouTube "{channel['name']}".
+Idioma de TODO o texto para o público (títulos, descrições, tags, narração): {lang}.
+Linha editorial: {s['niche']}
+Estilo de narração: {s['style']}
 
 Regras editoriais:
 - Fatos sobre pessoas e casos reais devem ser verdadeiros. Nunca invente nomes, datas, números,
@@ -73,29 +79,23 @@ def _check(resp) -> None:
         raise RuntimeError("Resposta truncada (max_tokens).")
 
 
-def generate_ideas(
-    count: int,
-    kind: str,
-    niche: str,
-    content_mix: list[str],
-    avoid: list[str],
-) -> list[Idea]:
-    """Gera `count` ideias novas, evitando temas já usados."""
+def generate_ideas(channel: dict, count: int, kind: str, avoid: list[str]) -> list[Idea]:
+    """Gera `count` ideias novas para o canal, evitando temas já usados."""
+    s = channel["settings"]
     avoid_txt = "\n".join(f"- {t}" for t in avoid[:150]) or "(nenhum ainda)"
     fmt = "YouTube Shorts verticais de 45-60 segundos" if kind == "short" else "vídeos longos de 7-10 minutos"
     prompt = (
-        f"Nicho do canal: {niche}\n"
         f"Formato: {fmt}\n"
-        f"Categorias permitidas: {', '.join(content_mix)}\n\n"
+        f"Categorias permitidas: {', '.join(s['content_mix'])}\n\n"
         f"Sugira {count} ideias de vídeo inéditas, variadas entre as categorias, com forte potencial de "
-        "retenção e busca. Prefira casos e temas reais e documentados, inclusive brasileiros. "
-        "Não repita nem faça variações destes temas já produzidos:\n"
+        "retenção e busca para o público do canal. Prefira temas reais e documentados quando a linha "
+        "editorial não for ficção. Não repita nem faça variações destes temas já produzidos:\n"
         f"{avoid_txt}"
     )
     resp = _client().beta.messages.parse(
         model=env().claude_model,
         max_tokens=16000,
-        system=SYSTEM,
+        system=system_prompt(channel),
         thinking={"type": "adaptive"},
         output_config={"effort": "medium"},
         betas=_BETAS,
@@ -115,7 +115,7 @@ def research(topic: str, angle: str = "") -> Research:
             "role": "user",
             "content": (
                 f"Pesquise na web o tema: {topic}\n{('Enfoque: ' + angle) if angle else ''}\n\n"
-                "Monte um dossiê factual em português com: contexto, linha do tempo, pessoas envolvidas "
+                "Monte um dossiê factual com: contexto, linha do tempo, pessoas envolvidas "
                 "(só o que for público), fatos verificados, pontos controversos/não resolvidos e teorias. "
                 "Marque o que é confirmado e o que é especulação. Seja conciso (até 600 palavras)."
             ),
@@ -157,7 +157,26 @@ def research(topic: str, angle: str = "") -> Research:
     return Research(dossier="".join(text_parts).strip(), sources=sources[:8])
 
 
+def script_shape(channel: dict, kind: str) -> str:
+    s = channel["settings"]
+    wpm = lang_text(s["language"])["wpm"]
+    if kind == "short":
+        lo, hi = int(wpm * 0.85), int(wpm * 1.05)
+        return (
+            f"YouTube Short vertical. Narração total de {lo} a {hi} palavras (45-58 segundos). "
+            "4 a 7 cenas curtas. A primeira frase é o gancho e precisa prender em 2 segundos. "
+            "Termine com uma pergunta ou revelação que faça a pessoa comentar ou rever o vídeo."
+        )
+    mins = s["long_target_minutes"]
+    return (
+        f"Vídeo longo horizontal. Narração total de cerca de {mins * wpm} palavras (~{mins} minutos). "
+        "12 a 25 cenas. Estrutura: gancho forte (15s), contexto, desenvolvimento com tensão crescente, "
+        "virada/revelação, perguntas em aberto e encerramento pedindo inscrição e comentário."
+    )
+
+
 def write_script(
+    channel: dict,
     topic: str,
     kind: str,
     *,
@@ -166,26 +185,12 @@ def write_script(
     hook: str = "",
     is_fiction: bool = False,
     dossier: str = "",
-    long_minutes: int = 8,
 ) -> VideoScript:
-    if kind == "short":
-        shape = (
-            "YouTube Short vertical. Narração total de 120 a 150 palavras (45-58 segundos). "
-            "4 a 7 cenas curtas. A primeira frase é o gancho e precisa prender em 2 segundos. "
-            "Termine com uma pergunta ou revelação que faça a pessoa comentar ou rever o vídeo."
-        )
-    else:
-        words = long_minutes * 140
-        shape = (
-            f"Vídeo longo horizontal. Narração total de cerca de {words} palavras (~{long_minutes} minutos). "
-            "12 a 25 cenas. Estrutura: gancho forte (15s), contexto, desenvolvimento com tensão crescente, "
-            "virada/revelação, perguntas em aberto e encerramento pedindo inscrição e comentário."
-        )
     prompt = (
         f"Escreva o roteiro completo.\nTema: {topic}\nCategoria: {category or 'livre'}\n"
         f"Enfoque: {angle or 'livre'}\nGancho sugerido: {hook or 'crie um'}\n"
         f"Ficção: {'sim, apresente como lenda/ficção' if is_fiction else 'não, conteúdo factual'}\n\n"
-        f"Formato: {shape}\n\n"
+        f"Formato: {script_shape(channel, kind)}\n\n"
         "A descrição deve resumir o vídeo sem spoiler e terminar com 3 a 5 hashtags."
         + (" Inclua #shorts entre as hashtags." if kind == "short" else "")
         + ("\n\nDossiê de pesquisa (use apenas estes fatos para afirmações sobre o caso):\n" + dossier if dossier else "")
@@ -193,7 +198,7 @@ def write_script(
     resp = _client().beta.messages.parse(
         model=env().claude_model,
         max_tokens=16000,
-        system=SYSTEM,
+        system=system_prompt(channel),
         thinking={"type": "adaptive"},
         output_config={"effort": "high"},
         betas=_BETAS,

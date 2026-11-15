@@ -1,35 +1,42 @@
-# Dark Generator
+# Dark Generator — gerenciador de canais dark
 
-Gerador de conteúdo **dark** (mistérios, casos reais, lendas, curiosidades sombrias) para YouTube —
-vídeos longos e **Shorts** — com publicação diária nos melhores horários, controle total **via MCP**
-e um **painel web** para gerenciar o canal.
+Gerencie **vários canais dark** no YouTube (vídeos longos e **Shorts**) a partir de um só lugar:
+cada canal com seu nicho, idioma, voz, público e agenda; produção e publicação diárias nos
+melhores horários; manutenção de tudo **via MCP** (Claude) ou pelo **painel web**.
 
 ```
-ideia → pesquisa na web → roteiro → narração (TTS) → vídeo (fundos + legendas + trilha) → upload agendado
-  Claude API ou você via MCP          edge-tts          ffmpeg                     YouTube Data API (publishAt)
+                       ┌─ Canal A (pt-BR, casos reais)  ─┐
+ Claude (MCP) / painel ─┼─ Canal B (en-US, unsolved)     ─┼─ worker único → roteiro → narração → vídeo → upload agendado
+                       └─ Canal C (pt-BR, contos terror) ─┘      prioriza o vídeo com horário mais próximo
 ```
 
 ## O que ele faz
 
-- **Roteiros com Claude** (`claude-opus-5-5`): gera ideias inéditas, pesquisa casos reais na web
-  (fontes vão para a descrição) e escreve o roteiro em cenas. Ficção é marcada como ficção.
-- **Vídeo pronto para postar**: narração em pt-BR (edge-tts), legendas sincronizadas palavra a
-  palavra (estilo Shorts), fundos de vídeo do Pexels com color grading sombrio (ou fundos procedurais,
-  sem chave nenhuma), trilha ambiente com *ducking* e loudness em -14 LUFS, thumbnail.
-- **Agenda nos melhores horários**: curva base para o público brasileiro (picos no almoço e à noite)
-  que **se ajusta sozinha** com as views dos seus próprios vídeos. O upload é feito como privado com
-  `publishAt`, então **o próprio YouTube publica no horário** — o servidor só precisa estar ligado
-  para produzir e enviar com antecedência.
-- **Piloto automático**: todo dia preenche a cota (padrão: 2 Shorts + 1 longo) e cuida do resto.
-  Opcionalmente exige sua aprovação antes de cada upload.
-- **MCP**: 18 ferramentas para o Claude (Desktop, Code ou qualquer cliente MCP) operar o canal —
-  inclusive escrever os roteiros ele mesmo, sem precisar de API key no servidor.
-- **Painel web**: visão geral, fila de produção com preview do vídeo, criação manual, heatmap de
+- **Vários canais, cada um com perfil próprio**: nicho/linha editorial, estilo de narração, idioma,
+  fuso do público, voz, cor das legendas, cotas diárias (Shorts/longos), aprovação manual,
+  piloto automático e conta do YouTube.
+- **Modelos de nicho prontos** (casos reais, mistérios históricos, lendas BR, contos de terror,
+  curiosidades sombrias, paranormal, oceano/espaço, **Unsolved Mysteries em inglês** e
+  **Misterios em espanhol**) — canais em inglês costumam ter RPM bem maior.
+- **Roteiros com Claude** (`claude-opus-5-5`) no idioma e estilo do canal, com pesquisa na web
+  para casos reais (fontes na descrição). Ou o próprio Claude escreve via MCP, sem API key.
+- **Vídeo pronto**: narração (edge-tts), legendas palavra a palavra na cor do canal, fundos
+  Pexels com color grading sombrio (ou procedurais), trilha com *ducking*, -14 LUFS, thumbnail.
+- **Melhores horários por canal**, no fuso do público, que se ajustam às views de cada canal.
+  Upload como privado com `publishAt`: o próprio YouTube publica na hora.
+- **Manutenção**: diagnóstico de saúde por canal (conexão, falhas, agenda vazia, aprovações
+  pendentes, cota, inatividade, queda de views) com a ação sugerida para cada problema;
+  pausar/retomar, duplicar canal, mover vídeo entre canais, refazer falhas, limpar arquivos.
+- **Cota do YouTube sob controle**: a cota é por projeto do Google Cloud; o sistema conta os
+  uploads por projeto, segura a fila quando chega no limite e permite uma credencial OAuth
+  própria por canal para dividir a carga.
+- **Painel web**: portfólio com todos os canais, comparação de desempenho, criação de canal
+  com modelos, e por canal: visão geral, fila com preview, criação de vídeos, heatmap de
   horários, desempenho e configurações.
 
 ## Instalação
 
-Requisitos: Python 3.11+, `ffmpeg` e uma fonte DejaVu (`apt install ffmpeg fonts-dejavu-core`).
+Requisitos: Python 3.11+, `ffmpeg` e fonte DejaVu (`apt install ffmpeg fonts-dejavu-core`).
 
 ```bash
 python3 -m venv .venv && . .venv/bin/activate
@@ -38,46 +45,49 @@ cp .env.example .env        # preencha as chaves
 python -m darkgen serve     # painel em http://127.0.0.1:8000
 ```
 
-Ou com Docker:
+Docker (para rodar 24h num servidor):
 
 ```bash
 docker build -t darkgen .
 docker run -d --name darkgen -p 8000:8000 -v $PWD/data:/data --env-file .env darkgen
 ```
 
-### Chaves
+| Variável | Para quê |
+|---|---|
+| `ANTHROPIC_API_KEY` | Piloto automático (ideias, pesquisa, roteiros). Opcional se os roteiros vierem via MCP. |
+| `PEXELS_API_KEY` | Vídeos reais de fundo (opcional). |
+| `DASHBOARD_TOKEN` | Protege painel/API/MCP fora do localhost. |
+| `PUBLIC_BASE_URL` | URL pública (callback OAuth e links gerados pelo MCP) em servidor remoto. |
+| `YOUTUBE_UPLOADS_PER_PROJECT_PER_DAY` | Limite de uploads por projeto do Google/dia (padrão 6). |
 
-| Variável | Para quê | Obrigatória? |
-|---|---|---|
-| `ANTHROPIC_API_KEY` | Piloto automático: ideias, pesquisa e roteiros | Só para o modo automático. Via MCP o Claude escreve os roteiros. |
-| `PEXELS_API_KEY` | Vídeos reais de fundo (gratuito em pexels.com/api) | Não — sem ela usa fundos procedurais |
-| `DASHBOARD_TOKEN` | Protege painel/API/MCP quando exposto fora do localhost | Recomendado em servidor |
-| `PUBLIC_BASE_URL` | URL pública, para o callback do OAuth em servidor | Só em servidor remoto |
+Trilhas próprias (livres de direitos) em `data/music/` substituem o drone procedural.
 
-Trilha própria: coloque arquivos `.mp3`/`.wav` (sem direitos autorais) em `data/music/` e ela será
-usada no lugar do drone procedural.
+## Criar e conectar um canal
 
-## Conectar o canal do YouTube
+O YouTube **não permite criar canais pela API**. O fluxo é:
 
-1. No [Google Cloud Console](https://console.cloud.google.com/), crie um projeto e ative a
-   **YouTube Data API v3**.
-2. Configure a tela de consentimento OAuth (adicione seu e-mail como usuário de teste).
-3. Crie um **ID do cliente OAuth** do tipo *App para computador* (ou *Aplicativo da Web* com o
-   redirect `http://localhost:8000/api/youtube/callback`).
-4. No painel → **Configurações**, envie o `client_secret.json` e clique em **Conectar canal**.
+1. Crie o canal no YouTube — de preferência como **Conta de Marca**, assim vários canais ficam
+   sob o mesmo login do Google.
+2. No painel → **+ Novo canal** (ou `create_channel` via MCP), escolha um modelo de nicho e ajuste.
+3. Na primeira vez, em **Configurações gerais**, envie o `client_secret.json`:
+   Google Cloud Console → ative a **YouTube Data API v3** → crie um *ID do cliente OAuth*
+   (“App para computador”, ou “Aplicativo da Web” com o redirect
+   `http://localhost:8000/api/youtube/callback`).
+4. Nas configurações do canal, clique em **Conectar YouTube** e, na tela do Google, **escolha o
+   canal certo** (Conta de Marca). Via MCP, `connect_youtube` devolve o link.
 
-> ⚠️ **Importante — auditoria da API:** vídeos enviados por projetos de API **não verificados**
-> ficam **travados como privados** pelo YouTube. Para publicar de verdade, peça a
-> [auditoria/verificação da YouTube API](https://support.google.com/youtube/contact/yt_api_form)
-> para o seu projeto. Até lá, os uploads funcionam, mas ficam privados.
+> ⚠️ **Auditoria da API:** projetos do Google não verificados só conseguem enviar vídeos
+> **privados**. Solicite a [auditoria da YouTube API](https://support.google.com/youtube/contact/yt_api_form)
+> para publicar de verdade.
 >
-> **Cota:** a cota padrão é de 10.000 unidades/dia e o upload é a operação mais cara (historicamente
-> ~1.600 unidades — confira a tabela de custos atual no Google Cloud). O padrão de 3 vídeos/dia cabe.
+> **Cota:** cada projeto tem 10.000 unidades/dia, e o upload é a operação mais cara (historicamente
+> ~1.600 unidades — confira a tabela atual). Com vários canais, crie **um projeto por grupo de
+> canais** e envie a credencial própria nas configurações de cada canal; o painel mostra o uso
+> por projeto.
 
 ## Usar via MCP
 
-**Claude Code** (nesta pasta): o arquivo `.mcp.json` já registra o servidor — basta abrir o Claude
-Code no diretório do projeto e aprovar o servidor `dark-generator`.
+**Claude Code** (nesta pasta): o `.mcp.json` já registra o servidor `dark-generator`.
 
 **Claude Desktop** (`claude_desktop_config.json`):
 
@@ -93,78 +103,77 @@ Code no diretório do projeto e aprovar o servidor `dark-generator`.
 }
 ```
 
-**Remoto (HTTP)**: com `python -m darkgen serve` rodando, o endpoint MCP é `http://HOST:PORT/mcp`
-(envie `Authorization: Bearer <DASHBOARD_TOKEN>` se definido).
+**Remoto (HTTP)**: com o `serve` rodando, o endpoint é `http://HOST:PORT/mcp`
+(`Authorization: Bearer <DASHBOARD_TOKEN>` se definido).
 
-> O modo stdio apenas grava na fila e consulta o estado; quem renderiza e envia é o
-> `python -m darkgen serve`. Mantenha-o rodando (ex.: Docker num VPS).
+> O modo stdio grava na fila e consulta o estado; quem renderiza e envia é o `serve`.
 
-### Ferramentas MCP
+### Ferramentas MCP (31)
 
-| Ferramenta | O que faz |
+| Grupo | Ferramentas |
 |---|---|
-| `channel_status` | Conexões, worker, contagens, próximos vídeos, configurações |
-| `script_guidelines` | Regras de formato do roteiro (Short ou longo) |
-| `list_recent_topics` | Temas já usados, para não repetir |
-| `create_video` | Cria vídeo — com roteiro pronto (`scenes`) ou só tema (Claude API escreve) |
-| `list_videos` / `get_video` | Consulta a fila e detalhes |
-| `update_video` | Edita título, descrição, tags, horário ou roteiro (antes do upload) |
-| `approve_video` | Libera upload quando a aprovação manual está ligada |
-| `retry_video` / `rerender_video` / `delete_video` | Gestão da fila |
-| `best_times` | Heatmap e próximos horários livres |
-| `plan_schedule` | Preenche a agenda automaticamente (requer Claude API) |
-| `analytics` / `refresh_stats` | Desempenho e atualização das estatísticas |
-| `get_settings` / `update_settings` | Configurações do canal |
-| `activity_log` | Últimos eventos |
+| **Portfólio** | `portfolio_overview`, `list_channels`, `compare_channels`, `quota_status` |
+| **Canais** | `list_niche_presets`, `create_channel`, `get_channel`, `update_channel` (inclui pausar), `clone_channel`, `delete_channel`, `connect_youtube`, `disconnect_youtube` |
+| **Manutenção** | `channel_health`, `retry_failed`, `retry_video`, `rerender_video`, `cleanup_files`, `activity_log`, `refresh_stats` |
+| **Conteúdo** | `script_guidelines`, `list_recent_topics`, `create_video`, `list_videos`, `get_video`, `update_video`, `move_video`, `approve_video`, `delete_video` |
+| **Agenda e dados** | `best_times`, `plan_schedule`, `analytics` |
 
-Exemplo de pedido ao Claude: *"Veja o status do canal, escolha 3 casos reais pouco conhecidos que
-ainda não usamos, pesquise e crie 3 Shorts para amanhã nos melhores horários."*
+Exemplos de pedidos ao Claude:
+
+- *"Crie um canal 'Unsolved Files' com o modelo em inglês, 3 Shorts por dia e aprovação manual, e me
+  dê o link para conectar o YouTube."*
+- *"Rode o diagnóstico de todos os canais e resolva o que der: refaça as falhas e preencha as agendas vazias."*
+- *"Compare os canais. O nicho que mais rende: duplique para espanhol."*
+- *"Para o canal 2, escreva 3 Shorts sobre casos pouco conhecidos que ainda não usamos e agende nos melhores horários."*
 
 ## Comandos
 
 ```bash
-python -m darkgen serve          # painel + API + MCP HTTP + agendador (uso normal)
-python -m darkgen mcp            # MCP via stdio
-python -m darkgen plan --days 2  # preenche a agenda agora
-python -m darkgen work           # processa a fila sem o agendador
-python -m darkgen stats          # atualiza estatísticas do YouTube
-pytest                           # testes
+python -m darkgen serve                    # painel + API + MCP HTTP + agendador (uso normal)
+python -m darkgen mcp                      # MCP via stdio
+python -m darkgen channels                 # lista canais e problemas
+python -m darkgen presets                  # modelos de nicho
+python -m darkgen new-channel "Nome" --preset unsolved_en
+python -m darkgen plan [--channel 2] [--days 2]
+python -m darkgen work                     # processa a fila sem o agendador
+python -m darkgen stats [--channel 2]
+pytest                                     # testes
 ```
+
+Atualizando da versão de canal único: o banco é migrado automaticamente na primeira execução
+(o canal existente vira o canal #1, com vídeos, histórico e token do YouTube).
 
 ## Como funciona a agenda
 
-- **Shorts**: picos às 12h e 19h–22h (fim de semana a partir das 10h).
-- **Longos**: publicados ~1–2h antes do pico (17h–20h) para dar tempo de indexar.
-- Depois de 6 vídeos publicados há mais de 48h, o sistema compara as views por hora de publicação
-  com a média do canal e ajusta o heatmap (com peso crescente conforme acumula dados).
-- Intervalo mínimo entre publicações configurável (padrão 3h). Se um vídeo perder o horário
-  (ex.: servidor desligado), vai para o próximo melhor horário livre.
+- Horários no **fuso do público de cada canal**. Shorts: picos às 12h e 19h–22h (fim de semana a
+  partir das 10h). Longos: ~1–2h antes do pico (17h–20h) para indexar.
+- Após 6 vídeos publicados com 48h+, o canal passa a ter seu próprio heatmap ajustado pelas views.
+- Intervalo mínimo entre publicações do mesmo canal (padrão 3h). Vídeo que perdeu o horário vai
+  para o próximo melhor horário livre do canal.
 
 ## Boas práticas e riscos (leia!)
 
-- **Monetização**: o YouTube desmonetiza conteúdo *"inautêntico"* — produzido em massa, repetitivo
-  ou com pouco valor agregado. Use a aprovação manual no começo, varie formatos e temas, revise
-  roteiros e prefira qualidade a volume.
-- **Casos reais**: o sistema pesquisa e cita fontes, mas revise fatos sobre pessoas reais antes de
-  publicar. Erros sobre pessoas reais podem gerar problemas legais.
-- **Conteúdo sintético**: se o vídeo tiver material realista que possa ser confundido com real,
-  ative "Marcar como conteúdo alterado ou sintético" nas configurações.
-- **edge-tts** usa o serviço de voz do Microsoft Edge (não oficial). Para produção séria, considere
-  plugar um TTS comercial em `darkgen/media/tts.py`.
-- **Músicas**: use apenas faixas livres de direitos em `data/music/`.
+- **Conteúdo inautêntico / spam**: o YouTube desmonetiza conteúdo produzido em massa e repetitivo,
+  e pode penalizar **redes de canais com conteúdo duplicado**. Cada canal deve ter identidade e
+  conteúdo próprios: não republique o mesmo vídeo em vários canais, varie nichos, estilos e formatos,
+  e use a aprovação manual no começo.
+- **Casos reais**: o sistema pesquisa e cita fontes, mas revise fatos sobre pessoas reais.
+- **Conteúdo sintético**: se houver material realista que possa ser confundido com real, ative
+  "conteúdo alterado ou sintético" no canal.
+- **edge-tts** é não oficial; para produção séria, plugue um TTS comercial em `darkgen/media/tts.py`.
 
 ## Estrutura
 
 ```
 darkgen/
-  config.py            variáveis de ambiente + configurações padrão do canal
-  db.py                SQLite: vídeos, configurações, atividade
-  content/writer.py    Claude: ideias, pesquisa na web, roteiro estruturado
+  config.py            variáveis de ambiente, padrões por canal e modelos de nicho
+  db.py                SQLite: canais, vídeos, estado, atividade (+ migração da v1)
+  content/writer.py    Claude: ideias, pesquisa na web, roteiro no idioma/estilo do canal
   media/               tts.py, subtitles.py, visuals.py, render.py (ffmpeg)
-  youtube/client.py    OAuth, upload com publishAt, estatísticas
-  scheduling/          melhores horários (curva base + adaptação)
-  pipeline.py          worker da fila + planejador diário
-  service.py           regras compartilhadas por painel e MCP
+  youtube/client.py    OAuth por canal, upload com publishAt, estatísticas, erros de cota
+  scheduling/          melhores horários por canal (curva base + adaptação)
+  pipeline.py          worker multi-canal, cota por projeto, planejador, estatísticas
+  service.py           canais, portfólio, saúde, vídeos (compartilhado por painel e MCP)
   mcp_server.py        servidor MCP
   web/                 FastAPI + painel (HTML/CSS/JS sem build)
 ```

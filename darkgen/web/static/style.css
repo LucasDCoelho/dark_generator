@@ -170,3 +170,66 @@ dialog::backdrop { background: rgba(0,0,0,.7); }
   .scene { grid-template-columns: 22px 1fr 32px; }
   .scene input { grid-column: 2; }
 }
+
+/* ---------- multi-canal ---------- */
+.nav-global.bottom { margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--border); }
+.channel-picker { margin: 18px 0 8px; padding: 0 4px; display: grid; gap: 4px; }
+.nav-channel { padding-left: 6px; border-left: 1px solid var(--border); margin-left: 8px; }
+.nav-channel[hidden] { display: none; }
+.nav-channel a { cursor: pointer; font-size: 13.5px; }
+.nowrap { white-space: nowrap; }
+tbody tr.static { cursor: default; }
+.note { background: #1b1508; border: 1px solid #4a3a10; color: #e9d29a; border-radius: 8px; padding: 10px 14px; margin-bottom: 18px; font-size: 13px; }
+.empty-state { text-align: center; padding: 36px; grid-column: 1 / -1; }
+.feed-ch { color: var(--text); text-decoration: none; font-weight: 600; }
+.best-key { display: inline-block; width: 12px; height: 12px; outline: 2px solid var(--text); outline-offset: -2px; border-radius: 3px; vertical-align: middle; }
+
+.channel-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; margin-bottom: 16px; }
+.channel-grid > .card { margin: 0; }
+.channel-card { display: grid; gap: 12px; align-content: start; }
+.channel-card.paused { opacity: .65; }
+.cc-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+.cc-title { display: flex; gap: 10px; align-items: center; min-width: 0; }
+.cc-title img, .avatar { width: 38px; height: 38px; border-radius: 50%; flex: none; }
+.avatar { background: #2a1015; color: var(--accent-2); display: grid; place-items: center; font-weight: 700; }
+.cc-name { color: var(--text); font-weight: 600; font-size: 15px; text-decoration: none; }
+.cc-name:hover { text-decoration: underline; }
+.cc-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.cc-stats div { background: var(--surface-2); border-radius: 8px; padding: 8px 10px; display: grid; }
+.cc-stats .label { color: var(--muted); font-size: 11px; }
+.cc-stats strong { font-size: 17px; font-variant-numeric: tabular-nums; }
+.channel-card .actions .btn { text-decoration: none; font-size: 13px; padding: 6px 12px; }
+a.btn { display: inline-block; text-decoration: none; }
+
+.issues { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.issues li { display: grid; grid-template-columns: 22px 1fr; gap: 8px; align-items: start; font-size: 13px; }
+.issues .ic { width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; font-weight: 700; color: #111; margin-top: 1px; }
+.issues .critical .ic { background: var(--critical); }
+.issues .warning .ic { background: var(--warning); }
+.issues .info .ic { background: var(--info); color: #fff; }
+.issues.compact li { font-size: 12px; color: var(--text-2); }
+
+.preset-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; margin-bottom: 22px; }
+.preset { text-align: left; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; color: var(--text); cursor: pointer; display: grid; gap: 6px; font: inherit; justify-items: start; }
+.preset:hover { border-color: #444; }
+.preset.active { border-color: var(--accent); background: #2a1015; }
+#page-new-channel h2 { margin-top: 4px; }
+
+.hbars { display: grid; gap: 8px; }
+.hbar { display: grid; grid-template-columns: minmax(90px, 160px) 1fr 52px; gap: 10px; align-items: center; font-size: 13px; }
+.hb-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); }
+.hb-track { height: 14px; background: transparent; }
+.hb-fill { display: block; height: 100%; background: #3987e5; border-radius: 0 4px 4px 0; }
+.hbar:hover .hb-fill { background: #6da7ec; }
+.hb-value { text-align: right; font-variant-numeric: tabular-nums; }
+
+.danger-zone { border-color: #4a1a1f; }
+.danger-zone .row { align-items: end; }
+input[type=color] { height: 38px; padding: 4px; }
+
+@media (max-width: 900px) {
+  .channel-picker { margin: 0; flex: 1 1 100%; }
+  .nav-channel { border-left: 0; margin-left: 0; padding-left: 0; }
+  .nav-global.bottom { margin-top: 0; padding-top: 0; border-top: 0; }
+  .cc-stats { grid-template-columns: repeat(2, 1fr); }
+}

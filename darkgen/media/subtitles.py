@@ -35,12 +35,20 @@ def chunk_words(words: list[Word], max_words: int, max_chars: int) -> list[list[
     return chunks
 
 
-def build_ass(words: list[Word], out: Path, kind: str) -> Path:
+def ass_color(hex_color: str) -> str:
+    """'#RRGGBB' -> '&H00BBGGRR' (formato de cor do ASS)."""
+    h = (hex_color or "#FF4B4B").lstrip("#")
+    if len(h) != 6:
+        h = "FF4B4B"
+    return f"&H00{h[4:6]}{h[2:4]}{h[0:2]}".upper()
+
+
+def build_ass(words: list[Word], out: Path, kind: str, highlight: str = "#FF4B4B") -> Path:
     if kind == "short":
         w, h = 1080, 1920
-        # Primary = cor depois de falada (vermelho-sangue claro); Secondary = antes (branco)
+        # Primary = cor depois de falada (destaque do canal); Secondary = antes (branco)
         style = (
-            f"Style: Default,{FONT},88,&H004B4BFF,&H00FFFFFF,&H00000000,&H96000000,"
+            f"Style: Default,{FONT},88,{ass_color(highlight)},&H00FFFFFF,&H00000000,&H96000000,"
             "-1,0,0,0,100,100,0,0,1,7,3,5,80,80,0,1"
         )
         chunks = chunk_words(words, max_words=3, max_chars=18)
