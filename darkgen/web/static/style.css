@@ -246,3 +246,18 @@ fieldset.checks legend { width: 100%; padding: 0; margin-bottom: 4px; }
 .trend { background: var(--surface-2); border-radius: 8px; padding: 12px; display: grid; gap: 6px; align-content: start; }
 .trend.dim { opacity: .6; }
 #scan-history tbody tr { cursor: pointer; }
+
+/* ---------- séries ---------- */
+.series-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 16px; }
+.series-list > .card { margin: 0; display: grid; gap: 10px; align-content: start; }
+.series-title { font-size: 15px; }
+.episodes { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.episodes li { display: grid; grid-template-columns: 26px minmax(0, 1fr) auto auto; gap: 10px; align-items: center; background: var(--surface-2); border-radius: 8px; padding: 8px 10px; cursor: pointer; font-size: 13px; }
+.episodes li:hover { background: #222221; }
+.ep-n { width: 22px; height: 22px; border-radius: 50%; background: #2a1015; color: var(--accent-2); display: grid; place-items: center; font-weight: 700; font-size: 12px; }
+.ep-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 900px) {
+  .series-list { grid-template-columns: minmax(0, 1fr); }
+  .episodes li { grid-template-columns: 22px minmax(0, 1fr) auto; }
+  .episodes li .nowrap { display: none; }
+}

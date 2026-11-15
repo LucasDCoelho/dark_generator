@@ -34,6 +34,21 @@ def _channel(video: dict) -> dict:
     return ch
 
 
+# ---------------------------------------------------------------- textos
+
+def compose_description(channel: dict, description: str, sources: list[str] | None, is_fiction: bool,
+                        kind: str, title: str = "") -> str:
+    lt = lang_text(channel["settings"]["language"])
+    desc = (description or "").strip()
+    if sources:
+        desc += f"\n\n{lt['sources']}:\n" + "\n".join(f"• {u}" for u in sources)
+    if is_fiction and lt["fiction"] not in desc:
+        desc = f"{lt['fiction']}\n\n{desc}"
+    if kind == "short" and "#shorts" not in (title + desc).lower():
+        desc += "\n\n#shorts"
+    return desc.strip()
+
+
 # ---------------------------------------------------------------- etapas
 
 def _stage_script(video: dict, channel: dict) -> None:
@@ -61,12 +76,7 @@ def _stage_script(video: dict, channel: dict) -> None:
         channel, topic, video["kind"], category=category, angle=angle, hook=hook,
         is_fiction=is_fiction, dossier=dossier,
     )
-    lt = lang_text(s["language"])
-    description = script.description
-    if sources:
-        description += f"\n\n{lt['sources']}:\n" + "\n".join(f"• {u}" for u in sources)
-    if script.is_fiction:
-        description = f"{lt['fiction']}\n\n" + description
+    description = compose_description(channel, script.description, sources, script.is_fiction, video["kind"], script.title)
     tags = list(dict.fromkeys([*script.tags, *s["default_tags"]]))
     db.update_video(
         vid, status="scripted", title=script.title, description=description, tags=tags,
@@ -92,25 +102,61 @@ def _stage_upload(video: dict, channel: dict) -> None:
     from .youtube import client as yt
 
     s = channel["settings"]
+    lt = lang_text(s["language"])
+    prev = db.previous_episode(video)
+    prev_at = db.parse_iso(prev["scheduled_at"]) if prev else None
+    gap = timedelta(hours=s["min_gap_hours"])
     publish_at = db.parse_iso(video.get("scheduled_at"))
-    if publish_at is None or publish_at < datetime.now(timezone.utc) + UPLOAD_MIN_LEAD:
+    too_soon = publish_at is None or publish_at < datetime.now(timezone.utc) + UPLOAD_MIN_LEAD
+    out_of_order = bool(prev_at and publish_at and publish_at <= prev_at + gap)
+    if too_soon or out_of_order:
         old = publish_at
-        publish_at = best_times.next_free_slot(channel, video["kind"])
+        publish_at = best_times.next_free_slot(channel, video["kind"], not_before=prev_at + gap if prev_at else None)
         db.update_video(video["id"], scheduled_at=publish_at)
         if old:
-            db.log("Horário original perdido; reagendado para o próximo melhor horário", "warning",
+            db.log("Horário reagendado para manter a ordem da série" if out_of_order else
+                   "Horário original perdido; reagendado para o próximo melhor horário", "warning",
                    video["id"], channel["id"])
+    description = video["description"] or ""
+    series = db.get_series(video["series_id"]) if video.get("series_id") else None
+    if prev and prev.get("youtube_id"):
+        description = f"▶ {lt['previous']}: https://youtu.be/{prev['youtube_id']}\n\n{description}"
+    if series and series.get("playlist_id"):
+        description += f"\n\n📺 {lt['playlist']}: https://www.youtube.com/playlist?list={series['playlist_id']}"
     youtube_id = yt.upload(
         channel["id"], Path(video["video_path"]),
-        title=video["title"], description=video["description"] or "", tags=video["tags"] or [],
+        title=video["title"], description=description, tags=video["tags"] or [],
         category_id=s["category_id"], language=s["language"], publish_at=publish_at,
         synthetic_media=s["synthetic_media_disclosure"],
         thumbnail=Path(video["thumb_path"]) if video["kind"] == "long" and video.get("thumb_path") else None,
     )
     db.update_video(video["id"], status="scheduled", youtube_id=youtube_id, scheduled_at=publish_at,
                     uploaded_at=db.now_utc(), error=None)
+    if series and s["series_playlists"]:
+        _add_to_series_playlist(series, channel, youtube_id, video.get("episode"))
     local = publish_at.astimezone(tz_of(channel)).strftime("%d/%m %H:%M")
     db.log(f"Enviado ao YouTube ({youtube_id}), publica em {local}", video_id=video["id"], channel_id=channel["id"])
+
+
+def _add_to_series_playlist(series: dict, channel: dict, youtube_id: str, episode: int | None) -> None:
+    from .youtube import client as yt
+
+    lt = lang_text(channel["settings"]["language"])
+    try:
+        playlist_id = series.get("playlist_id")
+        if not playlist_id:
+            playlist_id = yt.create_playlist(channel["id"], f"{lt['series']}: {series['title']}",
+                                             series.get("logline") or "", channel["settings"]["language"])
+            db.update_series(series["id"], playlist_id=playlist_id)
+            db.log(f"Playlist da série criada: {series['title']}", channel_id=channel["id"])
+        yt.add_to_playlist(channel["id"], playlist_id, youtube_id, (episode - 1) if episode else None)
+    except yt.MissingScope:
+        if not db.get_state(f"warned_playlist_scope:{channel['id']}"):
+            db.log("Para criar playlists das séries, reconecte o YouTube deste canal (permissão nova).",
+                   "warning", channel_id=channel["id"])
+            db.set_state(f"warned_playlist_scope:{channel['id']}", True)
+    except Exception as e:  # noqa: BLE001 - playlist é complemento, não bloqueia a publicação
+        db.log(f"Não foi possível atualizar a playlist da série: {e}", "warning", channel_id=channel["id"])
 
 
 def _fail(video: dict, exc: Exception) -> None:
@@ -118,6 +164,128 @@ def _fail(video: dict, exc: Exception) -> None:
     db.update_video(video["id"], status="failed", error=f"{type(exc).__name__}: {exc}"[:2000],
                     attempts=(video.get("attempts") or 0) + 1)
     db.log(f"Falhou: {exc}", "error", video["id"], video.get("channel_id"))
+
+
+# ---------------------------------------------------------------- séries
+
+def create_series_plan(
+    channel: dict,
+    parts: int,
+    kind: str,
+    topic: str | None = None,
+    angle: str | None = None,
+    is_fiction: bool = False,
+    start_day=None,
+) -> dict:
+    """Cria a série e já reserva os horários dos episódios (um por dia, em dias seguidos).
+    Os roteiros são escritos depois pelo worker (etapa de série)."""
+    if not 2 <= parts <= 10:
+        raise ValueError("Uma série deve ter de 2 a 10 partes.")
+    if kind not in ("short", "long"):
+        raise ValueError("kind deve ser 'short' ou 'long'.")
+    tz = tz_of(channel)
+    start_day = start_day or datetime.now(tz).date()
+    slots = best_times.series_slots(channel, kind, parts, start_day)
+    series = db.create_series(channel["id"], kind, parts, status="queued", topic=topic, angle=angle,
+                              is_fiction=is_fiction, title=topic)
+    for n, slot in enumerate(slots, start=1):
+        db.create_video(channel["id"], kind, status="queued", series_id=series["id"], episode=n,
+                        scheduled_at=slot, topic=topic, is_fiction=is_fiction)
+    first = slots[0].astimezone(tz).strftime("%d/%m %H:%M")
+    db.log(f"Série planejada ({parts} partes, começa {first})", channel_id=channel["id"])
+    return series
+
+
+def fill_series(series: dict, channel: dict, title: str, logline: str, episodes: list[dict],
+                is_fiction: bool, sources: list[str] | None = None) -> None:
+    """Grava os roteiros nos episódios reservados e marca a série como pronta."""
+    s = channel["settings"]
+    eps = {v["episode"]: v for v in db.episodes(series["id"])}
+    for n, ep in enumerate(episodes, start=1):
+        v = eps.get(n)
+        if not v or v["status"] not in ("queued", "scripting", "failed"):
+            continue
+        desc = compose_description(channel, ep.get("description") or "", sources, is_fiction, series["kind"], ep["title"])
+        db.update_video(
+            v["id"], status="scripted", title=ep["title"], description=desc,
+            tags=list(dict.fromkeys([*(ep.get("tags") or []), *s["default_tags"]])),
+            thumbnail_text=ep.get("thumbnail_text") or ep["title"], is_fiction=is_fiction,
+            sources=sources or [], script={"scenes": ep["scenes"]}, error=None,
+        )
+    db.update_series(series["id"], status="ready", title=title, logline=logline, is_fiction=is_fiction,
+                     sources=sources or [], error=None)
+    db.log(f"Série pronta: {title} ({len(episodes)} partes)", channel_id=channel["id"])
+
+
+def _stage_series(series: dict, channel: dict) -> None:
+    from .content import writer
+
+    topic, angle, is_fiction = series.get("topic"), series.get("angle") or "", bool(series["is_fiction"])
+    if not topic:
+        idea = writer.generate_ideas(channel, 1, series["kind"], db.recent_topics(channel["id"]),
+                                     series_parts=series["parts"])[0]
+        topic, angle, is_fiction = idea.topic, idea.angle, idea.is_fiction
+        db.update_series(series["id"], topic=topic, angle=angle, is_fiction=is_fiction)
+    dossier, sources = "", []
+    if channel["settings"]["research_with_web"] and not is_fiction:
+        r = writer.research(topic, angle)
+        dossier, sources = r.dossier, r.sources
+    script = writer.write_series(channel, topic, series["parts"], series["kind"], angle=angle,
+                                 is_fiction=is_fiction, dossier=dossier)
+    fill_series(series, channel, script.series_title, script.logline,
+                [e.model_dump() for e in script.episodes], script.is_fiction, sources)
+
+
+def _fail_series(series: dict, exc: Exception) -> None:
+    log.exception("Falha na série %s", series["id"])
+    db.update_series(series["id"], status="failed", error=f"{type(exc).__name__}: {exc}"[:2000])
+    for v in db.episodes(series["id"]):
+        if v["status"] in ("queued", "scripting"):
+            db.update_video(v["id"], status="failed", error="A série não pôde ser escrita.")
+    db.log(f"Série falhou: {exc}", "error", channel_id=series["channel_id"])
+
+
+def retry_series(series_id: int) -> dict | None:
+    s = db.get_series(series_id)
+    if not s:
+        return None
+    if s["status"] == "failed":
+        for v in db.episodes(series_id):
+            if v["status"] == "failed" and not v.get("script"):
+                db.update_video(v["id"], status="queued", error=None)
+        return db.update_series(series_id, status="queued", error=None)
+    for v in db.episodes(series_id):
+        if v["status"] == "failed":
+            retry(v["id"])
+    return db.get_series(series_id)
+
+
+def cancel_series(series_id: int) -> dict | None:
+    """Cancela a série: remove da fila os episódios que ainda não foram enviados ao YouTube."""
+    s = db.get_series(series_id)
+    if not s:
+        return None
+    removed = 0
+    for v in db.episodes(series_id):
+        if not v.get("youtube_id"):
+            remove(v["id"])
+            removed += 1
+    db.log(f"Série cancelada ({removed} episódio(s) removido(s) da fila)", "warning", channel_id=s["channel_id"])
+    return db.update_series(series_id, status="cancelled")
+
+
+def _sync_series() -> None:
+    for s in db.list_series(status=["ready", "writing"], limit=500):
+        eps = db.episodes(s["id"])
+        if eps and all(v["status"] == "published" for v in eps):
+            db.update_series(s["id"], status="done")
+            db.log(f"Série concluída: {s['title']}", channel_id=s["channel_id"])
+
+
+def _series_blocked(video: dict) -> bool:
+    """Episódio só sobe depois que o anterior já está no YouTube (garante a ordem)."""
+    prev = db.previous_episode(video)
+    return bool(prev and not prev.get("youtube_id"))
 
 
 # ---------------------------------------------------------------- cota do YouTube (por projeto)
@@ -156,6 +324,8 @@ def recover_interrupted() -> None:
     back = {"scripting": "queued", "rendering": "scripted", "uploading": "rendered"}
     for v in db.list_videos(status=list(back), limit=5000):
         db.update_video(v["id"], status=back[v["status"]])
+    for s in db.list_series(status="writing", limit=500):
+        db.update_series(s["id"], status="queued")
 
 
 def _next_upload() -> tuple[dict, dict] | None:
@@ -171,13 +341,13 @@ def _next_upload() -> tuple[dict, dict] | None:
             continue
         if ch["id"] not in connected:
             connected[ch["id"]] = yt.is_connected(ch["id"])
-        if connected[ch["id"]] and _upload_allowed(ch["id"], quota):
+        if connected[ch["id"]] and _upload_allowed(ch["id"], quota) and not _series_blocked(v):
             return v, ch
     return None
 
 
-def _next_of(status: str) -> dict | None:
-    rows = db.list_videos(status=status, active_channels_only=True, limit=1,
+def _next_of(status: str, exclude_series: bool = False) -> dict | None:
+    rows = db.list_videos(status=status, active_channels_only=True, limit=1, exclude_series=exclude_series,
                           order="scheduled_at IS NULL, scheduled_at ASC, id ASC")
     return rows[0] if rows else None
 
@@ -189,6 +359,7 @@ def work_tick() -> bool:
     try:
         db.set_state("worker_heartbeat", db.iso(db.now_utc()))
         _sync_published()
+        _sync_series()
 
         # 1) upload — o que já está pronto e tem o horário mais próximo
         nxt = _next_upload()
@@ -217,9 +388,20 @@ def work_tick() -> bool:
                 _fail(v, e)
             return True
 
-        # 3) roteiro (precisa da API do Claude)
+        # 3) séries: escreve todos os episódios de uma vez (precisa da API do Claude)
         if has_claude():
-            v = _next_of("queued")
+            active = {c["id"] for c in db.list_channels(active_only=True)}
+            for srs in reversed(db.list_series(status="queued", limit=50)):  # mais antiga primeiro
+                if srs["channel_id"] in active and db.transition_series(srs["id"], "queued", "writing"):
+                    try:
+                        _stage_series(db.get_series(srs["id"]), db.get_channel(srs["channel_id"]))
+                    except Exception as e:  # noqa: BLE001
+                        _fail_series(srs, e)
+                    return True
+
+        # 4) roteiro de vídeos avulsos (precisa da API do Claude)
+        if has_claude():
+            v = _next_of("queued", exclude_series=True)
             if v and db.transition(v["id"], "queued", "scripting"):
                 try:
                     _stage_script(db.get_video(v["id"]), _channel(v))
@@ -322,6 +504,25 @@ def plan(channel_id: int | None = None, days_ahead: int | None = None) -> list[d
     return out
 
 
+def maybe_start_series(channel: dict) -> dict | None:
+    """Com auto_series ligado, começa uma série nova a cada `series_every_days` dias.
+    Ela começa depois do horizonte já planejado, então os episódios contam na cota diária."""
+    s = channel["settings"]
+    if not s["auto_series"]:
+        return None
+    if db.list_series(channel_id=channel["id"], status=["queued", "writing"], limit=1):
+        return None
+    last = db.last_series_created_at(channel["id"])
+    if last and datetime.now(timezone.utc) - last < timedelta(days=s["series_every_days"]):
+        return None
+    start = datetime.now(tz_of(channel)).date() + timedelta(days=s["plan_days_ahead"] + 1)
+    try:
+        return create_series_plan(channel, s["series_parts"], s["series_kind"], start_day=start)
+    except ValueError as e:
+        db.log(f"Série automática não criada: {e}", "warning", channel_id=channel["id"])
+        return None
+
+
 def autopilot_tick() -> None:
     if not has_claude():
         if not db.get_state("warned_no_claude"):
@@ -331,6 +532,7 @@ def autopilot_tick() -> None:
     for ch in db.list_channels(active_only=True):
         if ch["settings"]["autopilot"]:
             try:
+                maybe_start_series(ch)
                 plan_channel(ch)
             except Exception:  # noqa: BLE001
                 log.exception("Planejamento falhou no canal %s", ch["id"])

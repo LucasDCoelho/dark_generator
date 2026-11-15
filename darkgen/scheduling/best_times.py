@@ -85,6 +85,7 @@ def pick_slots(
     count: int,
     taken: list[datetime] | None = None,
     perf: tuple[dict, dict] | None = None,
+    not_before: datetime | None = None,
 ) -> list[datetime]:
     """Escolhe `count` horários (UTC) no dia `day` (fuso do canal), respeitando o intervalo mínimo."""
     if count <= 0:
@@ -100,7 +101,7 @@ def pick_slots(
         if scores[h] < 0.2:
             break
         slot = datetime.combine(day, time(h, 0), tzinfo=tz).astimezone(timezone.utc)
-        if slot < now + MIN_LEAD:
+        if slot < now + MIN_LEAD or (not_before and slot <= not_before):
             continue
         if any(abs(slot - t) < gap for t in taken + chosen):
             continue
@@ -110,15 +111,37 @@ def pick_slots(
     return sorted(chosen)
 
 
-def next_free_slot(channel: dict, kind: str, horizon_days: int = 14) -> datetime:
-    """Próximo bom horário livre do canal a partir de agora."""
+def next_free_slot(channel: dict, kind: str, horizon_days: int = 14, not_before: datetime | None = None) -> datetime:
+    """Próximo bom horário livre do canal a partir de agora (ou depois de `not_before`)."""
     tz = tz_of(channel)
-    today = datetime.now(tz).date()
+    first = max(datetime.now(timezone.utc), not_before or datetime.now(timezone.utc))
+    today = first.astimezone(tz).date()
     start = datetime.combine(today, time(0), tzinfo=tz)
     taken = [t for t, _ in db.occupied_slots(channel["id"], start, start + timedelta(days=horizon_days + 1))]
     perf = performance_by_hour(channel, kind)
     for d in range(horizon_days):
-        slots = pick_slots(channel, today + timedelta(days=d), kind, 1, taken, perf)
+        slots = pick_slots(channel, today + timedelta(days=d), kind, 1, taken, perf, not_before)
         if slots:
             return slots[0]
-    return datetime.now(timezone.utc) + MIN_LEAD
+    return first + MIN_LEAD
+
+
+def series_slots(channel: dict, kind: str, parts: int, start_day: date) -> list[datetime]:
+    """Um horário por dia, em dias seguidos a partir de `start_day`, cada episódio depois do anterior."""
+    tz = tz_of(channel)
+    start = datetime.combine(start_day, time(0), tzinfo=tz)
+    taken = [t for t, _ in db.occupied_slots(channel["id"], start - timedelta(days=1), start + timedelta(days=parts + 30))]
+    perf = performance_by_hour(channel, kind)
+    out: list[datetime] = []
+    day = start_day
+    for _ in range(parts + 30):  # pula dias sem horário livre
+        if len(out) == parts:
+            break
+        got = pick_slots(channel, day, kind, 1, taken, perf, out[-1] if out else None)
+        if got:
+            out.append(got[0])
+            taken.append(got[0])
+        day += timedelta(days=1)
+    if len(out) < parts:
+        raise ValueError("Não há horários livres suficientes para a série; reduza as partes ou a agenda do canal.")
+    return out

@@ -30,6 +30,9 @@ no YouTube e conecta aqui.
 Produzir: script_guidelines → list_recent_topics → create_video com o roteiro em `scenes` (ou só tema,
 se o servidor tiver Claude API) → o worker renderiza e agenda no melhor horário do canal.
 Manutenção: channel_health (sem channel_id = todos) mostra problemas e a ação sugerida para cada um.
+Séries em partes (formato que mais prende): create_series (Claude no servidor escreve) ou
+create_series_from_script (você escreve todos os episódios) — episódios saem em dias seguidos, em ordem,
+com gancho entre as partes, link para a parte anterior e playlist. auto_series no canal automatiza.
 Tendências: scan_youtube_trends (dados reais do YouTube: views/dia e outliers de canais pequenos) e
 scan_social_trends (TikTok/Kwai/Instagram via pesquisa na web) ajudam a escolher nichos antes de criar
 canais; os resultados ficam salvos (list_trend_scans / compare_trend_scans).
@@ -49,6 +52,14 @@ def tool():
                 raise ToolError(str(e)) from e
         return mcp.tool()(wrapper)
     return deco
+
+
+class EpisodeIn(BaseModel):
+    title: str = Field(description="Título do episódio terminando com '(Parte N)' / '(Part N)'.")
+    scenes: list["SceneIn"]
+    description: str = ""
+    tags: list[str] = []
+    thumbnail_text: str = ""
 
 
 class SceneIn(BaseModel):
@@ -353,6 +364,72 @@ def activity_log(channel_id: int | None = None, limit: int = 30, only_errors: bo
 def cleanup_files(channel_id: int | None = None, older_than_days: int = 7) -> dict:
     """Libera disco apagando os arquivos locais de vídeos já publicados há mais de N dias."""
     return {"cleaned": pipeline.cleanup_files(channel_id, older_than_days)}
+
+
+# ================================================================ séries
+
+@tool()
+def create_series(
+    channel_id: int,
+    parts: int = 3,
+    kind: Literal["short", "long"] = "short",
+    topic: str | None = None,
+    angle: str | None = None,
+    is_fiction: bool = False,
+    start_date: str | None = None,
+) -> dict:
+    """Cria uma série em partes que o servidor escreve com a API do Claude (pesquisa + todos os episódios
+    de uma vez, com gancho no fim de cada parte). Os horários são reservados na hora: um episódio por dia,
+    nos melhores horários, a partir de `start_date` (AAAA-MM-DD; padrão hoje). Sem topic, o Claude escolhe."""
+    return service.create_series(channel_id, parts, kind, topic, angle, is_fiction, start_date)
+
+
+@tool()
+def create_series_from_script(
+    channel_id: int,
+    title: str,
+    episodes: list[EpisodeIn],
+    kind: Literal["short", "long"] = "short",
+    logline: str = "",
+    is_fiction: bool = False,
+    sources: list[str] | None = None,
+    start_date: str | None = None,
+) -> dict:
+    """Cria uma série com os episódios já escritos (não precisa de API key no servidor). Regras: a partir
+    da parte 2, a 1ª cena resume a anterior em uma frase; todas menos a última terminam com cliffhanger;
+    nomes e fatos idênticos entre as partes. Veja script_guidelines para o tamanho de cada episódio."""
+    return service.create_series_from_script(
+        channel_id, title, [e.model_dump() for e in episodes], kind, logline, is_fiction, sources, start_date)
+
+
+@tool()
+def list_series(channel_id: int | None = None, status: str | None = None) -> list[dict]:
+    """Séries (de um canal ou de todos) com progresso. status: queued, writing, ready, done, failed, cancelled."""
+    return service.list_series(channel_id, status)
+
+
+@tool()
+def get_series(series_id: int) -> dict:
+    """Detalhes da série: episódios, status de cada um, horários e playlist."""
+    return service.get_series(series_id)
+
+
+@tool()
+def retry_series(series_id: int) -> dict:
+    """Tenta de novo uma série que falhou (ou os episódios com falha que estão travando a sequência)."""
+    s = pipeline.retry_series(series_id)
+    if not s:
+        raise ValueError("Série não encontrada.")
+    return service.series_summary(s)
+
+
+@tool()
+def cancel_series(series_id: int) -> dict:
+    """Cancela a série e remove da fila os episódios ainda não enviados (os já enviados ficam no YouTube)."""
+    s = pipeline.cancel_series(series_id)
+    if not s:
+        raise ValueError("Série não encontrada.")
+    return service.series_summary(s)
 
 
 # ================================================================ tendências

@@ -23,6 +23,11 @@ melhores horários; manutenção de tudo **via MCP** (Claude) ou pelo **painel w
   para casos reais (fontes na descrição). Ou o próprio Claude escreve via MCP, sem API key.
 - **Vídeo pronto**: narração (edge-tts), legendas palavra a palavra na cor do canal, fundos
   Pexels com color grading sombrio (ou procedurais), trilha com *ducking*, -14 LUFS, thumbnail.
+- **Séries em partes automáticas**: o Claude escreve todos os episódios de uma vez (mesma história,
+  nomes e fatos), cada parte termina com gancho e a seguinte abre com um resumo rápido. Os episódios
+  saem **um por dia, sempre em ordem**, nos melhores horários; a descrição traz o link da parte
+  anterior e cada série ganha uma **playlist** no YouTube. Com `auto_series`, o piloto automático
+  inicia uma série nova a cada N dias.
 - **Melhores horários por canal**, no fuso do público, que se ajustam às views de cada canal.
   Upload como privado com `publishAt`: o próprio YouTube publica na hora.
 - **Manutenção**: diagnóstico de saúde por canal (conexão, falhas, agenda vazia, aprovações
@@ -114,7 +119,7 @@ O YouTube **não permite criar canais pela API**. O fluxo é:
 
 > O modo stdio grava na fila e consulta o estado; quem renderiza e envia é o `serve`.
 
-### Ferramentas MCP (36)
+### Ferramentas MCP (42)
 
 | Grupo | Ferramentas |
 |---|---|
@@ -123,6 +128,7 @@ O YouTube **não permite criar canais pela API**. O fluxo é:
 | **Manutenção** | `channel_health`, `retry_failed`, `retry_video`, `rerender_video`, `cleanup_files`, `activity_log`, `refresh_stats` |
 | **Conteúdo** | `script_guidelines`, `list_recent_topics`, `create_video`, `list_videos`, `get_video`, `update_video`, `move_video`, `approve_video`, `delete_video` |
 | **Agenda e dados** | `best_times`, `plan_schedule`, `analytics` |
+| **Séries** | `create_series`, `create_series_from_script`, `list_series`, `get_series`, `retry_series`, `cancel_series` |
 | **Tendências** | `scan_youtube_trends`, `scan_social_trends`, `list_trend_scans`, `get_trend_scan`, `compare_trend_scans` |
 
 Exemplos de pedidos ao Claude:
@@ -131,6 +137,8 @@ Exemplos de pedidos ao Claude:
   dê o link para conectar o YouTube."*
 - *"Rode o diagnóstico de todos os canais e resolva o que der: refaça as falhas e preencha as agendas vazias."*
 - *"Compare os canais. O nicho que mais rende: duplique para espanhol."*
+- *"Crie uma série de 4 partes no canal de contos sobre um hotel que não aparece no mapa, começando amanhã."*
+- *"Escreva você mesmo uma série de 3 Shorts sobre o desaparecimento do voo 19 para o canal 2 e agende."*
 - *"Varra as tendências do YouTube nos EUA e no Brasil para sobrevivência, backrooms e casos não
   resolvidos, cruze com o que está em alta no TikTok e Kwai e me diga qual canal criar a seguir."*
 - *"Para o canal 2, escreva 3 Shorts sobre casos pouco conhecidos que ainda não usamos e agende nos melhores horários."*
@@ -151,6 +159,18 @@ pytest                                     # testes
 
 Atualizando da versão de canal único: o banco é migrado automaticamente na primeira execução
 (o canal existente vira o canal #1, com vídeos, histórico e token do YouTube).
+
+## Séries
+
+- Os horários de todos os episódios são **reservados na criação** (um por dia, a partir da data de
+  início), então contam na cota diária do canal e o planejador preenche o resto em volta.
+- Um episódio só é enviado depois que o anterior já está no YouTube; se a parte 2 falhar, a 3
+  espera (o diagnóstico do canal avisa e `retry_series` resolve). Se um horário ficar fora de ordem,
+  o episódio é reagendado para depois do anterior.
+- **Playlists** exigem uma permissão extra do YouTube: canais conectados antes desta versão
+  continuam publicando normalmente, e o painel pede para **reconectar** quando quiser as playlists.
+- Modelos com séries automáticas ligadas: contos de terror, sobreviventes e liminal (EN). Em
+  qualquer canal: Configurações do canal → “Séries automáticas”.
 
 ## Como funciona a agenda
 
@@ -181,7 +201,7 @@ darkgen/
   media/               tts.py, subtitles.py, visuals.py, render.py (ffmpeg)
   youtube/client.py    OAuth por canal, upload com publishAt, estatísticas, erros de cota
   scheduling/          melhores horários por canal (curva base + adaptação)
-  pipeline.py          worker multi-canal, cota por projeto, planejador, estatísticas
+  pipeline.py          worker multi-canal, séries, cota por projeto, planejador, estatísticas
   service.py           canais, portfólio, saúde, vídeos (compartilhado por painel e MCP)
   trends.py            scanner de tendências (YouTube Data API + pesquisa web das redes)
   mcp_server.py        servidor MCP

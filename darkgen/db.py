@@ -76,6 +76,24 @@ CREATE TABLE IF NOT EXISTS activity (
     message TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS series (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel_id INTEGER NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'short',
+    status TEXT NOT NULL DEFAULT 'queued',  -- queued, writing, ready, done, failed, cancelled
+    title TEXT,
+    topic TEXT,
+    angle TEXT,
+    logline TEXT,
+    is_fiction INTEGER NOT NULL DEFAULT 0,
+    parts INTEGER NOT NULL,
+    sources TEXT NOT NULL DEFAULT '[]',
+    playlist_id TEXT,
+    error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS trend_scans (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ts TEXT NOT NULL,
@@ -99,6 +117,7 @@ CREATE INDEX IF NOT EXISTS idx_videos_status ON videos(status);
 CREATE INDEX IF NOT EXISTS idx_videos_sched ON videos(scheduled_at);
 CREATE INDEX IF NOT EXISTS idx_videos_channel ON videos(channel_id, status);
 CREATE INDEX IF NOT EXISTS idx_activity_channel ON activity(channel_id, id);
+CREATE INDEX IF NOT EXISTS idx_videos_series ON videos(series_id, episode);
 """
 
 # Estados do pipeline, na ordem em que acontecem.
@@ -185,6 +204,15 @@ def _migrate_v1(conn: sqlite3.Connection) -> None:
         shutil.move(str(old_token), str(env().channel_dir(cid) / "youtube_token.json"))
 
 
+def _ensure_columns(conn: sqlite3.Connection) -> None:
+    """Colunas adicionadas depois da v2 (bancos já existentes)."""
+    cols = _columns(conn, "videos")
+    if "series_id" not in cols:
+        conn.execute("ALTER TABLE videos ADD COLUMN series_id INTEGER")
+    if "episode" not in cols:
+        conn.execute("ALTER TABLE videos ADD COLUMN episode INTEGER")
+
+
 @contextmanager
 def connect() -> Iterator[sqlite3.Connection]:
     global _initialized
@@ -196,6 +224,7 @@ def connect() -> Iterator[sqlite3.Connection]:
                 conn.execute("PRAGMA journal_mode=WAL")
                 conn.executescript(TABLES)
                 _migrate_v1(conn)
+                _ensure_columns(conn)
                 conn.executescript(INDEXES)
                 conn.commit()
                 _initialized = True
@@ -271,6 +300,7 @@ def update_channel(channel_id: int, settings: dict | None = None, **fields: Any)
 def delete_channel(channel_id: int) -> None:
     with connect() as c:
         c.execute("DELETE FROM videos WHERE channel_id = ?", (channel_id,))
+        c.execute("DELETE FROM series WHERE channel_id = ?", (channel_id,))
         c.execute("DELETE FROM activity WHERE channel_id = ?", (channel_id,))
         c.execute("DELETE FROM channel_stats WHERE channel_id = ?", (channel_id,))
         c.execute("DELETE FROM channels WHERE id = ?", (channel_id,))
@@ -356,8 +386,15 @@ def list_videos(
     offset: int = 0,
     order: str = "COALESCE(scheduled_at, created_at) DESC",
     active_channels_only: bool = False,
+    series_id: int | None = None,
+    exclude_series: bool = False,
 ) -> list[dict]:
     where, args = [], []
+    if series_id is not None:
+        where.append("series_id = ?")
+        args.append(series_id)
+    if exclude_series:
+        where.append("series_id IS NULL")
     if status:
         statuses = [status] if isinstance(status, str) else status
         where.append(f"status IN ({', '.join('?' for _ in statuses)})")
@@ -501,3 +538,83 @@ def get_trend_scan(scan_id: int) -> dict | None:
     if not r:
         return None
     return {**dict(r), "params": json.loads(r["params"]), "results": json.loads(r["results"])}
+
+
+# ---------------------------------------------------------------- séries
+
+def _row_to_series(row: sqlite3.Row | None) -> dict | None:
+    if row is None:
+        return None
+    d = dict(row)
+    d["is_fiction"] = bool(d["is_fiction"])
+    d["sources"] = json.loads(d["sources"] or "[]")
+    return d
+
+
+def create_series(channel_id: int, kind: str, parts: int, **fields: Any) -> dict:
+    ts = iso(now_utc())
+    data = _encode({"channel_id": channel_id, "kind": kind, "parts": parts, **fields, "created_at": ts, "updated_at": ts})
+    if "sources" in data and not isinstance(data["sources"], str):
+        data["sources"] = json.dumps(data["sources"], ensure_ascii=False)
+    with connect() as c:
+        cur = c.execute(f"INSERT INTO series ({', '.join(data)}) VALUES ({', '.join('?' for _ in data)})",
+                        list(data.values()))
+        sid = cur.lastrowid
+    return get_series(sid)  # type: ignore[return-value]
+
+
+def get_series(series_id: int) -> dict | None:
+    with connect() as c:
+        return _row_to_series(c.execute("SELECT * FROM series WHERE id = ?", (series_id,)).fetchone())
+
+
+def update_series(series_id: int, **fields: Any) -> dict | None:
+    if "sources" in fields and not isinstance(fields["sources"], str):
+        fields["sources"] = json.dumps(fields["sources"], ensure_ascii=False)
+    if fields:
+        data = _encode({**fields, "updated_at": now_utc()})
+        with connect() as c:
+            c.execute(f"UPDATE series SET {', '.join(f'{k} = ?' for k in data)} WHERE id = ?",
+                      [*data.values(), series_id])
+    return get_series(series_id)
+
+
+def transition_series(series_id: int, from_status: str, to_status: str) -> bool:
+    with connect() as c:
+        cur = c.execute("UPDATE series SET status = ?, updated_at = ? WHERE id = ? AND status = ?",
+                        (to_status, iso(now_utc()), series_id, from_status))
+        return cur.rowcount == 1
+
+
+def list_series(channel_id: int | None = None, status: str | list[str] | None = None, limit: int = 100) -> list[dict]:
+    where, args = [], []
+    if channel_id is not None:
+        where.append("channel_id = ?")
+        args.append(channel_id)
+    if status:
+        statuses = [status] if isinstance(status, str) else status
+        where.append(f"status IN ({', '.join('?' for _ in statuses)})")
+        args += statuses
+    sql = "SELECT * FROM series" + (" WHERE " + " AND ".join(where) if where else "") + " ORDER BY id DESC LIMIT ?"
+    with connect() as c:
+        return [_row_to_series(r) for r in c.execute(sql, [*args, limit]).fetchall()]  # type: ignore[misc]
+
+
+def last_series_created_at(channel_id: int) -> datetime | None:
+    with connect() as c:
+        row = c.execute("SELECT MAX(created_at) AS t FROM series WHERE channel_id = ? AND status != 'cancelled'",
+                        (channel_id,)).fetchone()
+    return parse_iso(row["t"])
+
+
+def episodes(series_id: int) -> list[dict]:
+    return list_videos(series_id=series_id, limit=100, order="episode ASC")
+
+
+def previous_episode(video: dict) -> dict | None:
+    if not video.get("series_id") or not video.get("episode") or video["episode"] <= 1:
+        return None
+    with connect() as c:
+        row = c.execute("SELECT * FROM videos WHERE series_id = ? AND episode < ? ORDER BY episode DESC LIMIT 1",
+                        (video["series_id"], video["episode"])).fetchone()
+    return _row_to_video(row)

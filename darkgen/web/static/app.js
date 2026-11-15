@@ -68,7 +68,7 @@ let channels = [];          // resumo de todos os canais (portfólio)
 let currentChannel = null;  // id do canal selecionado
 let refreshTimer;
 
-const channelPages = { overview: loadOverview, videos: loadVideos, new: initNew, times: loadTimes, analytics: loadAnalytics, config: loadConfig };
+const channelPages = { overview: loadOverview, videos: loadVideos, new: initNew, series: loadSeries, times: loadTimes, analytics: loadAnalytics, config: loadConfig };
 const globalPages = { portfolio: loadPortfolio, "videos-all": loadAllVideos, "new-channel": loadNewChannel, settings: loadSettings, trends: loadTrends };
 const globalHash = { "": "portfolio", portfolio: "portfolio", videos: "videos-all", "new-channel": "new-channel", settings: "settings", trends: "trends" };
 
@@ -269,7 +269,7 @@ function videoTable(rows, cols) {
     channel: (v) => `<td class="nowrap">${esc(v.channel_name || "")}</td>`,
     when: (v) => `<td class="num">${esc(fmtWhen(v.scheduled_local))}</td>`,
     kind: (v) => `<td><span class="badge kind">${KIND_LABEL[v.kind]}</span></td>`,
-    title: (v) => `<td class="title" title="${esc(v.title)}">${esc(v.title)}</td>`,
+    title: (v) => `<td class="title" title="${esc(v.title)}">${v.episode ? `<span class="badge kind" title="Episódio de série">S·${v.episode}</span> ` : ""}${esc(v.title)}</td>`,
     status: (v) => `<td>${badge(v.status)}</td>`,
     views: (v) => `<td class="num">${fmt(v.views)}</td>`,
     likes: (v) => `<td class="num">${fmt(v.likes)}</td>`,
@@ -508,6 +508,52 @@ function updateWordCount() {
   const words = $$("#scenes textarea").reduce((n, t) => n + (t.value.trim() ? t.value.trim().split(/\s+/).length : 0), 0);
   $("#word-count").textContent = `${words} palavras · ~${Math.round(words / 2.5)}s de narração`;
 }
+
+// ============================================================ canal: séries
+const SERIES_STATUS = { queued: ["kind", "Na fila"], writing: ["rendered", "Escrevendo"], ready: ["scheduled", "Em andamento"],
+  done: ["published", "Concluída"], failed: ["failed", "Falhou"], cancelled: ["kind", "Cancelada"] };
+async function loadSeries() {
+  const list = await api(`/api/series?channel_id=${currentChannel}`);
+  const el = $("#series-list");
+  if (!list.length) { el.innerHTML = `<div class="card empty">Nenhuma série ainda.</div>`; return; }
+  const details = await Promise.all(list.map((s) => api(`/api/series/${s.id}`)));
+  el.innerHTML = details.map((s) => {
+    const [cls, label] = SERIES_STATUS[s.status] || ["kind", s.status];
+    const failed = s.status === "failed" || s.episodes.some((v) => v.status === "failed");
+    return `<div class="card series-card" data-id="${s.id}">
+      <div class="cc-head"><div><strong class="series-title">${esc(s.title || s.topic || "(tema escolhido pelo Claude)")}</strong>
+        <div class="muted small">${s.parts} partes · ${s.kind === "short" ? "Shorts" : "Longos"} · ${esc(fmtWhen(s.first_at))} → ${esc(fmtWhen(s.last_at))}${s.is_fiction ? " · ficção" : ""}</div></div>
+        <span class="badge ${cls}">${label}</span></div>
+      ${s.logline ? `<p class="muted">${esc(s.logline)}</p>` : ""}
+      ${s.error ? `<div class="err">${esc(s.error)}</div>` : ""}
+      <ol class="episodes">${s.episodes.map((v) => `<li data-video="${v.id}"><span class="ep-n">${v.episode}</span>
+        <span class="ep-title">${esc(v.title)}</span><span class="nowrap muted small">${esc(fmtWhen(v.scheduled_local))}</span>${badge(v.status)}</li>`).join("")}</ol>
+      <div class="actions">
+        ${s.playlist_url ? `<a class="btn" href="${esc(s.playlist_url)}" target="_blank" rel="noopener">Playlist ↗</a>` : ""}
+        ${failed ? `<button class="btn" data-act="retry">Tentar de novo</button>` : ""}
+        ${["queued", "writing", "ready"].includes(s.status) ? `<button class="btn danger" data-act="cancel">Cancelar série</button>` : ""}
+      </div></div>`;
+  }).join("");
+  $$("#series-list li[data-video]").forEach((li) => li.addEventListener("click", () => openVideo(+li.dataset.video)));
+  $$("#series-list [data-act]").forEach((b) => b.addEventListener("click", (e) => busy(e.target, async () => {
+    const id = b.closest(".series-card").dataset.id;
+    if (b.dataset.act === "cancel" && !confirm("Cancelar a série? Episódios ainda não enviados saem da fila.")) return;
+    await api(`/api/series/${id}/${b.dataset.act}`, { method: "POST" });
+    toast(b.dataset.act === "cancel" ? "Série cancelada." : "Série recolocada na fila."); loadSeries();
+  })));
+}
+$("#form-series").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const f = e.target;
+  busy(e.submitter, async () => {
+    const s = await api(`/api/channels/${currentChannel}/series`, { method: "POST", json: {
+      parts: +f.elements.parts.value, kind: f.elements.kind.value, topic: f.elements.topic.value || null,
+      angle: f.elements.angle.value || null, is_fiction: f.elements.is_fiction.checked, start_date: f.elements.start_date.value || null,
+    } });
+    toast(`Série criada: ${s.parts} partes, de ${fmtWhen(s.first_at)} a ${fmtWhen(s.last_at)}.`);
+    f.reset(); loadSeries();
+  });
+});
 
 // ============================================================ canal: horários (heatmap)
 // Rampa sequencial de um só matiz (azul), escura → clara, sobre superfície escura.

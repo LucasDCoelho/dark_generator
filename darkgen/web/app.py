@@ -120,6 +120,15 @@ class MoveIn(BaseModel):
     channel_id: int
 
 
+class SeriesIn(BaseModel):
+    parts: int = 3
+    kind: Literal["short", "long"] = "short"
+    topic: str | None = None
+    angle: str | None = None
+    is_fiction: bool = False
+    start_date: str | None = None
+
+
 class YouTubeScanIn(BaseModel):
     keywords: list[str] | None = None
     region: str = "BR"
@@ -195,6 +204,33 @@ def create_app(start_scheduler: bool = True) -> FastAPI:
     @app.post("/api/stats/refresh")
     def refresh_all():
         return pipeline.refresh_stats()
+
+    # ---------- séries
+    @app.get("/api/series")
+    def series_list(channel_id: int | None = None, status: str | None = None):
+        return service.list_series(channel_id, status)
+
+    @app.post("/api/channels/{channel_id}/series")
+    def series_create(channel_id: int, body: SeriesIn):
+        return service.create_series(channel_id, **body.model_dump())
+
+    @app.get("/api/series/{series_id}")
+    def series_get(series_id: int):
+        return service.get_series(series_id)
+
+    @app.post("/api/series/{series_id}/retry")
+    def series_retry(series_id: int):
+        s = pipeline.retry_series(series_id)
+        if not s:
+            raise HTTPException(404, "Série não encontrada")
+        return service.series_summary(s)
+
+    @app.post("/api/series/{series_id}/cancel")
+    def series_cancel(series_id: int):
+        s = pipeline.cancel_series(series_id)
+        if not s:
+            raise HTTPException(404, "Série não encontrada")
+        return service.series_summary(s)
 
     # ---------- tendências
     @app.get("/api/trends")

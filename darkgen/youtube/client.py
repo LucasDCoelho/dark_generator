@@ -28,7 +28,9 @@ log = logging.getLogger(__name__)
 SCOPES = [
     "https://www.googleapis.com/auth/youtube.upload",
     "https://www.googleapis.com/auth/youtube.readonly",
+    "https://www.googleapis.com/auth/youtube",  # playlists das séries
 ]
+PLAYLIST_SCOPE = "https://www.googleapis.com/auth/youtube"
 
 _pending_flows: dict[str, tuple[Flow, int]] = {}
 
@@ -115,7 +117,8 @@ def _credentials(channel_id: int) -> Credentials:
     path = _token_path(channel_id)
     if not path.exists():
         raise YouTubeNotConnected("Canal não conectado ao YouTube.")
-    creds = Credentials.from_authorized_user_file(str(path), SCOPES)
+    # Sem passar SCOPES: o token mantém os escopos que foram concedidos (tokens antigos não têm o de playlist).
+    creds = Credentials.from_authorized_user_file(str(path))
     if not creds.valid:
         if creds.expired and creds.refresh_token:
             creds.refresh(Request())
@@ -260,3 +263,35 @@ def upload(
         except HttpError as e:  # thumbnails personalizadas exigem canal verificado
             log.warning("Não foi possível definir a thumbnail: %s", e)
     return video_id
+
+
+# ---------------------------------------------------------------- playlists (séries)
+
+class MissingScope(RuntimeError):
+    pass
+
+
+def can_manage_playlists(channel_id: int) -> bool:
+    try:
+        return PLAYLIST_SCOPE in (_credentials(channel_id).scopes or [])
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def create_playlist(channel_id: int, title: str, description: str, language: str) -> str:
+    if not can_manage_playlists(channel_id):
+        raise MissingScope("Reconecte o canal para permitir playlists.")
+    body = {
+        "snippet": {"title": title[:150], "description": description[:4900], "defaultLanguage": language},
+        "status": {"privacyStatus": "public"},
+    }
+    return _yt(channel_id).playlists().insert(part="snippet,status", body=body).execute()["id"]
+
+
+def add_to_playlist(channel_id: int, playlist_id: str, video_id: str, position: int | None = None) -> None:
+    if not can_manage_playlists(channel_id):
+        raise MissingScope("Reconecte o canal para permitir playlists.")
+    snippet: dict = {"playlistId": playlist_id, "resourceId": {"kind": "youtube#video", "videoId": video_id}}
+    if position is not None:
+        snippet["position"] = position
+    _yt(channel_id).playlistItems().insert(part="snippet", body={"snippet": snippet}).execute()

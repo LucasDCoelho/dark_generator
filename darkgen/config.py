@@ -98,6 +98,12 @@ DEFAULT_CHANNEL_SETTINGS: dict = {
     "music_volume": 0.14,
     "long_target_minutes": 8,
     "subtitle_color": "#FF4B4B",  # cor de destaque das legendas dos Shorts (identidade visual)
+    # Séries em partes (episódios em dias seguidos, com gancho entre eles)
+    "auto_series": False,  # piloto automático também cria séries
+    "series_parts": 3,
+    "series_every_days": 7,  # intervalo entre o início de séries automáticas
+    "series_kind": "short",  # short | long
+    "series_playlists": True,  # cria uma playlist por série no YouTube (requer reconectar o canal)
 }
 
 
@@ -137,9 +143,12 @@ def coerce_settings(changes: dict) -> dict:
 
 # Linguagem do texto gerado pelo sistema (descrição, avisos), por idioma do canal.
 LANG_TEXT = {
-    "pt": {"fiction": "⚠️ História de ficção / lenda.", "sources": "Fontes", "wpm": 140, "name": "português do Brasil"},
-    "en": {"fiction": "⚠️ Fictional story / legend.", "sources": "Sources", "wpm": 150, "name": "English (US)"},
-    "es": {"fiction": "⚠️ Historia de ficción / leyenda.", "sources": "Fuentes", "wpm": 150, "name": "español latinoamericano"},
+    "pt": {"fiction": "⚠️ História de ficção / lenda.", "sources": "Fontes", "wpm": 140, "name": "português do Brasil",
+           "part": "Parte", "previous": "Parte anterior", "series": "Série", "playlist": "Assista a série completa"},
+    "en": {"fiction": "⚠️ Fictional story / legend.", "sources": "Sources", "wpm": 150, "name": "English (US)",
+           "part": "Part", "previous": "Previous part", "series": "Series", "playlist": "Watch the full series"},
+    "es": {"fiction": "⚠️ Historia de ficción / leyenda.", "sources": "Fuentes", "wpm": 150, "name": "español latinoamericano",
+           "part": "Parte", "previous": "Parte anterior", "series": "Serie", "playlist": "Mira la serie completa"},
 }
 
 
@@ -192,6 +201,9 @@ NICHE_PRESETS: dict[str, dict] = {
             "default_tags": ["creepypasta", "terror", "contos de terror", "histórias de terror", "medo"],
             "research_with_web": False,
             "style": "narrador em primeira pessoa, tom íntimo e tenso, descrições sensoriais",
+            "auto_series": True,
+            "series_parts": 4,
+            "series_every_days": 5,
         },
     },
     "curiosidades_sombrias": {
@@ -247,6 +259,8 @@ NICHE_PRESETS: dict[str, dict] = {
             "content_mix": ["sobrevivencia", "naufragio", "desastre_aereo", "perdido_na_natureza"],
             "default_tags": ["sobrevivência", "história real", "desastres", "naufrágio", "sobreviventes"],
             "style": "narrador documental tenso, minuto a minuto, foco nas decisões e no que deu errado",
+            "auto_series": True,
+            "series_parts": 3,
         },
     },
     "psicologia_sombria": {
@@ -279,6 +293,9 @@ NICHE_PRESETS: dict[str, dict] = {
             "default_tags": ["liminal spaces", "backrooms", "analog horror", "creepy", "horror story"],
             "research_with_web": False,
             "subtitle_color": "#E8D44D",
+            "auto_series": True,
+            "series_parts": 4,
+            "series_every_days": 5,
         },
     },
     "unsolved_en": {

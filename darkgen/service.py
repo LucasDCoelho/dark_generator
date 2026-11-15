@@ -8,7 +8,7 @@ from datetime import datetime, time, timedelta, timezone
 from urllib.parse import quote
 
 from . import db, pipeline
-from .config import NICHE_PRESETS, coerce_settings, env, lang_text, tz_of
+from .config import NICHE_PRESETS, coerce_settings, env, tz_of
 from .scheduling import best_times
 
 _WEEKDAYS = ["seg", "ter", "qua", "qui", "sex", "sáb", "dom"]
@@ -64,6 +64,8 @@ def video_summary(v: dict, channel: dict | None = None) -> dict:
         "duration_s": v.get("duration_s"),
         "approved": v.get("approved"),
         "error": v.get("error"),
+        "series_id": v.get("series_id"),
+        "episode": v.get("episode"),
     }
 
 
@@ -228,6 +230,18 @@ def channel_health(channel_id: int, check_token: bool = True) -> dict:
             add("info", "views_drop", f"Views médias caíram {100 - recent * 100 / before:.0f}% nos últimos 5 vídeos.",
                 "revisar nicho/títulos com analytics(channel_id)")
 
+    for srs in db.list_series(channel_id=channel_id, status=["failed", "ready", "writing", "queued"], limit=50):
+        if srs["status"] == "failed":
+            add("warning", "series_failed", f"Série '{srs['title'] or srs['topic'] or srs['id']}' falhou ao ser escrita.",
+                f"retry_series({srs['id']})")
+            continue
+        eps = db.episodes(srs["id"])
+        stuck = next((v for v in eps if v["status"] == "failed"), None)
+        if stuck:
+            add("warning", "series_blocked",
+                f"Série '{srs['title'] or srs['id']}': parte {stuck['episode']} falhou e segura as próximas.",
+                f"retry_series({srs['id']}) ou retry_video({stuck['id']})")
+
     errors_24h = db.recent_activity(limit=20, channel_id=channel_id, level="error", since=now - timedelta(hours=24))
     rank = {"critical": 2, "warning": 1, "info": 0}
     worst = max((rank[i["severity"]] for i in issues), default=-1)
@@ -352,16 +366,9 @@ def create_video(
     if scenes:
         if not title:
             raise ServiceError("Com roteiro pronto, informe também o título.")
-        lt = lang_text(s["language"])
-        desc = description or ""
-        if sources:
-            desc += f"\n\n{lt['sources']}:\n" + "\n".join(f"• {u}" for u in sources)
-        if is_fiction and lt["fiction"] not in desc:
-            desc = f"{lt['fiction']}\n\n{desc}"
-        if kind == "short" and "#shorts" not in (title + desc).lower():
-            desc += "\n\n#shorts"
+        desc = pipeline.compose_description(ch, description or "", sources, is_fiction, kind, title)
         fields.update(
-            status="scripted", title=title, description=desc.strip(),
+            status="scripted", title=title, description=desc,
             tags=list(dict.fromkeys([*(tags or []), *s["default_tags"]])),
             thumbnail_text=thumbnail_text or title, script={"scenes": _validate_scenes(scenes)},
         )
@@ -507,3 +514,78 @@ def validate_settings(changes: dict) -> dict:
         return coerce_settings(changes)
     except ValueError as e:
         raise ServiceError(str(e)) from e
+
+
+# ---------------------------------------------------------------- séries
+
+def series_summary(srs: dict, with_episodes: bool = True) -> dict:
+    ch = db.get_channel(srs["channel_id"])
+    eps = db.episodes(srs["id"])
+    out = {
+        **srs,
+        "channel_name": ch["name"] if ch else None,
+        "published": sum(1 for v in eps if v["status"] == "published"),
+        "uploaded": sum(1 for v in eps if v.get("youtube_id")),
+        "first_at": _local(ch, eps[0]["scheduled_at"]) if ch and eps else None,
+        "last_at": _local(ch, eps[-1]["scheduled_at"]) if ch and eps else None,
+        "playlist_url": f"https://www.youtube.com/playlist?list={srs['playlist_id']}" if srs.get("playlist_id") else None,
+    }
+    if with_episodes:
+        out["episodes"] = [{**video_summary(v, ch), "episode": v["episode"]} for v in eps]
+    return out
+
+
+def _start_day(ch: dict, start_date: str | None):
+    if not start_date:
+        return None
+    try:
+        return datetime.fromisoformat(start_date.strip()[:10]).date()
+    except ValueError as e:
+        raise ServiceError("start_date deve ser 'AAAA-MM-DD'.") from e
+
+
+def create_series(channel_id: int, parts: int = 3, kind: str = "short", topic: str | None = None,
+                  angle: str | None = None, is_fiction: bool = False, start_date: str | None = None) -> dict:
+    """Série escrita pelo servidor (Claude API). Horários reservados na hora."""
+    ch = require_channel(channel_id)
+    if not pipeline.has_claude():
+        raise ServiceError("Sem ANTHROPIC_API_KEY no servidor: use create_series_from_script com os episódios prontos.")
+    try:
+        srs = pipeline.create_series_plan(ch, parts, kind, topic, angle, is_fiction, _start_day(ch, start_date))
+    except ValueError as e:
+        raise ServiceError(str(e)) from e
+    return series_summary(srs)
+
+
+def create_series_from_script(channel_id: int, title: str, episodes: list[dict], kind: str = "short",
+                              logline: str = "", is_fiction: bool = False, sources: list[str] | None = None,
+                              start_date: str | None = None) -> dict:
+    """Série com roteiros prontos (ex.: escritos pelo Claude via MCP)."""
+    ch = require_channel(channel_id)
+    if not title:
+        raise ServiceError("Informe o título da série.")
+    if len(episodes) < 2:
+        raise ServiceError("Uma série precisa de pelo menos 2 episódios.")
+    clean = []
+    for i, ep in enumerate(episodes, start=1):
+        if not ep.get("title"):
+            raise ServiceError(f"Episódio {i} sem título.")
+        clean.append({**ep, "scenes": _validate_scenes(ep.get("scenes") or [])})
+    try:
+        srs = pipeline.create_series_plan(ch, len(clean), kind, title, None, is_fiction, _start_day(ch, start_date))
+    except ValueError as e:
+        raise ServiceError(str(e)) from e
+    pipeline.fill_series(srs, ch, title, logline, clean, is_fiction, sources)
+    return series_summary(db.get_series(srs["id"]))
+
+
+def list_series(channel_id: int | None = None, status: str | None = None) -> list[dict]:
+    statuses = status.split(",") if status else None
+    return [series_summary(s, with_episodes=False) for s in db.list_series(channel_id, statuses)]
+
+
+def get_series(series_id: int) -> dict:
+    srs = db.get_series(series_id)
+    if not srs:
+        raise ServiceError("Série não encontrada.")
+    return series_summary(srs)

@@ -24,6 +24,7 @@
       <a data-sub="overview">Visão geral</a>
       <a data-sub="videos">Vídeos</a>
       <a data-sub="new">Criar vídeo</a>
+      <a data-sub="series">Séries</a>
       <a data-sub="times">Horários</a>
       <a data-sub="analytics">Desempenho</a>
       <a data-sub="config">Configurações do canal</a>
@@ -234,6 +235,29 @@
       </div>
     </section>
 
+    <!-- CANAL: SÉRIES -->
+    <section class="page" id="page-series" hidden>
+      <header class="page-head">
+        <div><h1 class="ch-name"></h1><p class="muted">Séries em partes: um episódio por dia, em ordem, com gancho entre as partes</p></div>
+      </header>
+      <div class="card">
+        <h2>Nova série</h2>
+        <form id="form-series" class="form">
+          <div class="row three">
+            <label>Partes <input type="number" name="parts" min="2" max="10" value="3"></label>
+            <label>Formato <select name="kind"><option value="short">Shorts</option><option value="long">Longos</option></select></label>
+            <label>Começa em <span class="muted">(vazio = hoje)</span><input type="date" name="start_date"></label>
+          </div>
+          <label>Tema <span class="muted">(vazio = Claude escolhe um tema com história para várias partes)</span><input name="topic" placeholder="Ex.: O desaparecimento do voo 19"></label>
+          <label>Enfoque <span class="muted">(opcional)</span><input name="angle"></label>
+          <label class="check"><input type="checkbox" name="is_fiction"> É ficção / lenda</label>
+          <p class="muted small">O Claude escreve todos os episódios de uma vez, com a mesma história, nomes e fatos. A partir da parte 2, o vídeo abre com um resumo rápido e a descrição traz o link da parte anterior e a playlist da série.</p>
+          <div class="actions"><button class="btn primary">Criar série</button></div>
+        </form>
+      </div>
+      <div id="series-list" class="series-list"></div>
+    </section>
+
     <!-- CANAL: HORÁRIOS -->
     <section class="page" id="page-times" hidden>
       <header class="page-head">
@@ -294,6 +318,13 @@
           <label class="check"><input type="checkbox" name="approval_required"> Exigir minha aprovação antes do upload</label>
           <label class="check"><input type="checkbox" name="research_with_web"> Pesquisar na web antes de escrever casos reais</label>
           <label class="check"><input type="checkbox" name="synthetic_media_disclosure"> Marcar como "conteúdo alterado ou sintético" no YouTube</label>
+          <label class="check"><input type="checkbox" name="auto_series"> Séries automáticas (o piloto automático também cria séries)</label>
+          <label class="check"><input type="checkbox" name="series_playlists"> Criar uma playlist no YouTube para cada série</label>
+          <div class="row three">
+            <label>Partes por série <input type="number" name="series_parts" min="2" max="10"></label>
+            <label>Nova série a cada (dias) <input type="number" name="series_every_days" min="1" max="60"></label>
+            <label>Formato das séries <select name="series_kind"><option value="short">Shorts</option><option value="long">Longos</option></select></label>
+          </div>
           <label>Nicho / linha editorial <textarea name="niche" rows="3"></textarea></label>
           <label>Estilo de narração <input name="style"></label>
           <div class="row three">

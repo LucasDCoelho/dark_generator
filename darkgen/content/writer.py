@@ -43,6 +43,21 @@ class VideoScript(BaseModel):
     scenes: list[Scene]
 
 
+class SeriesEpisode(BaseModel):
+    title: str = Field(description="Título do episódio, até 90 caracteres, terminando com o indicador da parte (ex.: '(Parte 2)').")
+    description: str = Field(description="Descrição do episódio com hashtags.")
+    tags: list[str] = Field(description="10 a 15 tags.")
+    thumbnail_text: str = Field(description="2 a 4 palavras de impacto.")
+    scenes: list[Scene]
+
+
+class SeriesScript(BaseModel):
+    series_title: str = Field(description="Nome da série (vira o nome da playlist).")
+    logline: str = Field(description="Resumo da série em 1-2 frases, sem spoiler do final.")
+    is_fiction: bool
+    episodes: list[SeriesEpisode]
+
+
 class Research(BaseModel):
     dossier: str
     sources: list[str]
@@ -79,11 +94,14 @@ def _check(resp) -> None:
         raise RuntimeError("Resposta truncada (max_tokens).")
 
 
-def generate_ideas(channel: dict, count: int, kind: str, avoid: list[str]) -> list[Idea]:
+def generate_ideas(channel: dict, count: int, kind: str, avoid: list[str], series_parts: int | None = None) -> list[Idea]:
     """Gera `count` ideias novas para o canal, evitando temas já usados."""
     s = channel["settings"]
     avoid_txt = "\n".join(f"- {t}" for t in avoid[:150]) or "(nenhum ainda)"
     fmt = "YouTube Shorts verticais de 45-60 segundos" if kind == "short" else "vídeos longos de 7-10 minutos"
+    if series_parts:
+        fmt = (f"SÉRIE em {series_parts} partes ({fmt} cada). A ideia precisa ter história suficiente para "
+               f"{series_parts} episódios, com reviravoltas que sustentem um gancho no fim de cada parte")
     prompt = (
         f"Formato: {fmt}\n"
         f"Categorias permitidas: {', '.join(s['content_mix'])}\n\n"
@@ -208,5 +226,57 @@ def write_script(
     )
     _check(resp)
     script = resp.parsed_output
+    script.is_fiction = script.is_fiction or is_fiction
+    return script
+
+
+def write_series(
+    channel: dict,
+    topic: str,
+    parts: int,
+    kind: str,
+    *,
+    angle: str = "",
+    is_fiction: bool = False,
+    dossier: str = "",
+) -> SeriesScript:
+    """Escreve todos os episódios de uma vez, para manter personagens, fatos e tom coerentes."""
+    part_word = lang_text(channel["settings"]["language"])["part"]
+    prompt = (
+        f"Escreva uma SÉRIE de {parts} episódios sobre: {topic}\n"
+        f"Enfoque: {angle or 'livre'}\n"
+        f"Ficção: {'sim, apresente como lenda/ficção' if is_fiction else 'não, conteúdo factual'}\n\n"
+        f"Formato de CADA episódio: {script_shape(channel, kind)}\n\n"
+        "Regras da série:\n"
+        f"- Exatamente {parts} episódios, na ordem. O título de cada um termina com '({part_word} N)'.\n"
+        "- Arco único: apresente o mistério na parte 1, aprofunde e vire a história nas do meio, e "
+        "entregue a resolução (ou, em casos reais sem solução, o que se sabe e as perguntas em aberto) na última.\n"
+        "- A partir da parte 2, a PRIMEIRA cena começa com um resumo de uma frase do que aconteceu antes, "
+        "já emendando num novo gancho.\n"
+        f"- Todas as partes, menos a última, terminam com um cliffhanger e um convite para a próxima "
+        f"('a {part_word.lower()} N+1 sai amanhã').\n"
+        "- Cada episódio precisa funcionar sozinho para quem cair nele primeiro.\n"
+        "- Personagens, nomes, datas e fatos idênticos em todas as partes.\n"
+        "- A descrição de cada parte termina com 3 a 5 hashtags"
+        + (" incluindo #shorts." if kind == "short" else ".")
+        + ("\n\nDossiê de pesquisa (use apenas estes fatos para afirmações sobre o caso):\n" + dossier if dossier else "")
+    )
+    with _client().beta.messages.stream(
+        model=env().claude_model,
+        max_tokens=64000,
+        system=system_prompt(channel),
+        thinking={"type": "adaptive"},
+        output_config={"effort": "high"},
+        betas=_BETAS,
+        fallbacks="default",
+        messages=[{"role": "user", "content": prompt}],
+        output_format=SeriesScript,
+    ) as stream:
+        resp = stream.get_final_message()
+    _check(resp)
+    script = resp.parsed_output
+    if script is None or len(script.episodes) < parts:
+        raise RuntimeError(f"A série veio com {0 if script is None else len(script.episodes)} de {parts} episódios.")
+    script.episodes = script.episodes[:parts]
     script.is_fiction = script.is_fiction or is_fiction
     return script
