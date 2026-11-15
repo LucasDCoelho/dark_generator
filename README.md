@@ -15,9 +15,10 @@ melhores horários; manutenção de tudo **via MCP** (Claude) ou pelo **painel w
 - **Vários canais, cada um com perfil próprio**: nicho/linha editorial, estilo de narração, idioma,
   fuso do público, voz, cor das legendas, cotas diárias (Shorts/longos), aprovação manual,
   piloto automático e conta do YouTube.
-- **Modelos de nicho prontos** (casos reais, mistérios históricos, lendas BR, contos de terror,
-  curiosidades sombrias, paranormal, oceano/espaço, **Unsolved Mysteries em inglês** e
-  **Misterios em espanhol**) — canais em inglês costumam ter RPM bem maior.
+- **13 modelos de nicho prontos**, revisados com base na pesquisa de tendências: terror em série,
+  história que não te contaram, sobreviventes e desastres, psicologia do comportamento,
+  liminal/Backrooms (EN), Unsolved Mysteries (EN), Misterios (ES), entre outros. Canais em inglês
+  costumam ter RPM bem maior.
 - **Roteiros com Claude** (`claude-opus-5-5`) no idioma e estilo do canal, com pesquisa na web
   para casos reais (fontes na descrição). Ou o próprio Claude escreve via MCP, sem API key.
 - **Vídeo pronto**: narração (edge-tts), legendas palavra a palavra na cor do canal, fundos
@@ -30,6 +31,10 @@ melhores horários; manutenção de tudo **via MCP** (Claude) ou pelo **painel w
 - **Cota do YouTube sob controle**: a cota é por projeto do Google Cloud; o sistema conta os
   uploads por projeto, segura a fila quando chega no limite e permite uma credencial OAuth
   própria por canal para dividir a carga.
+- **Scanner de tendências**: mede a demanda real no YouTube (views/dia e vídeos "outlier" de
+  canais pequenos por palavra-chave e região) e varre a web atrás do que está em alta no TikTok,
+  Kwai e Instagram. Pesquisa completa de nichos em
+  [`docs/pesquisa-tendencias-2026-11.md`](docs/pesquisa-tendencias-2026-11.md).
 - **Painel web**: portfólio com todos os canais, comparação de desempenho, criação de canal
   com modelos, e por canal: visão geral, fila com preview, criação de vídeos, heatmap de
   horários, desempenho e configurações.
@@ -59,6 +64,7 @@ docker run -d --name darkgen -p 8000:8000 -v $PWD/data:/data --env-file .env dar
 | `DASHBOARD_TOKEN` | Protege painel/API/MCP fora do localhost. |
 | `PUBLIC_BASE_URL` | URL pública (callback OAuth e links gerados pelo MCP) em servidor remoto. |
 | `YOUTUBE_UPLOADS_PER_PROJECT_PER_DAY` | Limite de uploads por projeto do Google/dia (padrão 6). |
+| `YOUTUBE_API_KEY` | Chave simples da YouTube Data API para o scanner de tendências — use **outro projeto** para não gastar a cota de uploads (cada palavra-chave custa ~100 unidades). Sem ela, usa o OAuth de um canal conectado. |
 
 Trilhas próprias (livres de direitos) em `data/music/` substituem o drone procedural.
 
@@ -108,7 +114,7 @@ O YouTube **não permite criar canais pela API**. O fluxo é:
 
 > O modo stdio grava na fila e consulta o estado; quem renderiza e envia é o `serve`.
 
-### Ferramentas MCP (31)
+### Ferramentas MCP (36)
 
 | Grupo | Ferramentas |
 |---|---|
@@ -117,6 +123,7 @@ O YouTube **não permite criar canais pela API**. O fluxo é:
 | **Manutenção** | `channel_health`, `retry_failed`, `retry_video`, `rerender_video`, `cleanup_files`, `activity_log`, `refresh_stats` |
 | **Conteúdo** | `script_guidelines`, `list_recent_topics`, `create_video`, `list_videos`, `get_video`, `update_video`, `move_video`, `approve_video`, `delete_video` |
 | **Agenda e dados** | `best_times`, `plan_schedule`, `analytics` |
+| **Tendências** | `scan_youtube_trends`, `scan_social_trends`, `list_trend_scans`, `get_trend_scan`, `compare_trend_scans` |
 
 Exemplos de pedidos ao Claude:
 
@@ -124,6 +131,8 @@ Exemplos de pedidos ao Claude:
   dê o link para conectar o YouTube."*
 - *"Rode o diagnóstico de todos os canais e resolva o que der: refaça as falhas e preencha as agendas vazias."*
 - *"Compare os canais. O nicho que mais rende: duplique para espanhol."*
+- *"Varra as tendências do YouTube nos EUA e no Brasil para sobrevivência, backrooms e casos não
+  resolvidos, cruze com o que está em alta no TikTok e Kwai e me diga qual canal criar a seguir."*
 - *"Para o canal 2, escreva 3 Shorts sobre casos pouco conhecidos que ainda não usamos e agende nos melhores horários."*
 
 ## Comandos
@@ -174,6 +183,7 @@ darkgen/
   scheduling/          melhores horários por canal (curva base + adaptação)
   pipeline.py          worker multi-canal, cota por projeto, planejador, estatísticas
   service.py           canais, portfólio, saúde, vídeos (compartilhado por painel e MCP)
+  trends.py            scanner de tendências (YouTube Data API + pesquisa web das redes)
   mcp_server.py        servidor MCP
   web/                 FastAPI + painel (HTML/CSS/JS sem build)
 ```

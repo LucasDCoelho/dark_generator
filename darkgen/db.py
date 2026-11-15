@@ -76,6 +76,14 @@ CREATE TABLE IF NOT EXISTS activity (
     message TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS trend_scans (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT NOT NULL,
+    platform TEXT NOT NULL,
+    params TEXT NOT NULL,
+    results TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS channel_stats (
     channel_id INTEGER NOT NULL,
     ts TEXT NOT NULL,
@@ -468,3 +476,28 @@ def recent_activity(limit: int = 50, channel_id: int | None = None, level: str |
     sql = "SELECT * FROM activity" + (" WHERE " + " AND ".join(where) if where else "") + " ORDER BY id DESC LIMIT ?"
     with connect() as c:
         return [dict(r) for r in c.execute(sql, [*args, limit]).fetchall()]
+
+
+# ---------------------------------------------------------------- varreduras de tendências
+
+def save_trend_scan(platform: str, params: dict, results: Any) -> int:
+    with connect() as c:
+        cur = c.execute(
+            "INSERT INTO trend_scans (ts, platform, params, results) VALUES (?, ?, ?, ?)",
+            (iso(now_utc()), platform, json.dumps(params, ensure_ascii=False), json.dumps(results, ensure_ascii=False)),
+        )
+        return cur.lastrowid  # type: ignore[return-value]
+
+
+def list_trend_scans(limit: int = 20) -> list[dict]:
+    with connect() as c:
+        rows = c.execute("SELECT id, ts, platform, params FROM trend_scans ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+    return [{**dict(r), "params": json.loads(r["params"])} for r in rows]
+
+
+def get_trend_scan(scan_id: int) -> dict | None:
+    with connect() as c:
+        r = c.execute("SELECT * FROM trend_scans WHERE id = ?", (scan_id,)).fetchone()
+    if not r:
+        return None
+    return {**dict(r), "params": json.loads(r["params"]), "results": json.loads(r["results"])}

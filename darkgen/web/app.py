@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from .. import db, pipeline, service
+from .. import db, pipeline, service, trends
 from ..config import env
 from ..mcp_server import mcp
 from ..scheduling import best_times
@@ -120,6 +120,20 @@ class MoveIn(BaseModel):
     channel_id: int
 
 
+class YouTubeScanIn(BaseModel):
+    keywords: list[str] | None = None
+    region: str = "BR"
+    language: str = "pt"
+    days: int = 14
+    per_keyword: int = 25
+
+
+class SocialScanIn(BaseModel):
+    platforms: list[str] | None = None
+    focus: str = ""
+    market: str = "Brasil"
+
+
 # ---------------------------------------------------------------- app
 
 def create_app(start_scheduler: bool = True) -> FastAPI:
@@ -181,6 +195,32 @@ def create_app(start_scheduler: bool = True) -> FastAPI:
     @app.post("/api/stats/refresh")
     def refresh_all():
         return pipeline.refresh_stats()
+
+    # ---------- tendências
+    @app.get("/api/trends")
+    def trend_scans(limit: int = 30):
+        return trends.list_scans(limit)
+
+    @app.get("/api/trends/keywords")
+    def trend_keywords():
+        return trends.DEFAULT_KEYWORDS
+
+    @app.get("/api/trends/{scan_id}")
+    def trend_scan(scan_id: int):
+        return trends.get_scan(scan_id)
+
+    @app.post("/api/trends/youtube")
+    def scan_youtube(body: YouTubeScanIn):
+        try:
+            return trends.scan_youtube(**body.model_dump())
+        except RuntimeError as e:
+            raise HTTPException(400, str(e)) from e
+
+    @app.post("/api/trends/social")
+    def scan_social(body: SocialScanIn):
+        if not pipeline.has_claude():
+            raise HTTPException(400, "Configure ANTHROPIC_API_KEY para a varredura das redes.")
+        return trends.scan_social(**body.model_dump())
 
     # ---------- canais
     @app.get("/api/channels")

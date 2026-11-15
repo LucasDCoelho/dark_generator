@@ -69,8 +69,8 @@ let currentChannel = null;  // id do canal selecionado
 let refreshTimer;
 
 const channelPages = { overview: loadOverview, videos: loadVideos, new: initNew, times: loadTimes, analytics: loadAnalytics, config: loadConfig };
-const globalPages = { portfolio: loadPortfolio, "videos-all": loadAllVideos, "new-channel": loadNewChannel, settings: loadSettings };
-const globalHash = { "": "portfolio", portfolio: "portfolio", videos: "videos-all", "new-channel": "new-channel", settings: "settings" };
+const globalPages = { portfolio: loadPortfolio, "videos-all": loadAllVideos, "new-channel": loadNewChannel, settings: loadSettings, trends: loadTrends };
+const globalHash = { "": "portfolio", portfolio: "portfolio", videos: "videos-all", "new-channel": "new-channel", settings: "settings", trends: "trends" };
 
 async function refreshChannels() {
   channels = await api("/api/channels");
@@ -674,6 +674,89 @@ $("#form-delete").addEventListener("submit", (e) => {
   busy(e.submitter, async () => {
     await api(`/api/channels/${currentChannel}?confirm=${encodeURIComponent(confirmName)}`, { method: "DELETE" });
     toast("Canal removido do gerenciador."); currentChannel = null; store("dg_channel", ""); location.hash = "#portfolio";
+  });
+});
+
+// ============================================================ tendências
+let defaultKeywords = null;
+async function loadTrends() {
+  if (!defaultKeywords) {
+    defaultKeywords = await api("/api/trends/keywords");
+    const f = $("#form-scan-yt");
+    f.elements.keywords.value = defaultKeywords.pt.join("\n");
+    f.elements.language.addEventListener("change", (e) => {
+      f.elements.keywords.value = (defaultKeywords[e.target.value] || []).join("\n");
+      f.elements.region.value = { pt: "BR", en: "US", es: "MX" }[e.target.value];
+    });
+  }
+  const scans = await api("/api/trends?limit=30");
+  $("#scan-history").innerHTML = scans.length ? `<div class="table-wrap"><table><thead><tr><th class="num">#</th><th>Data</th><th>Tipo</th><th>Parâmetros</th></tr></thead><tbody>${
+    scans.map((s) => `<tr data-scan="${s.id}"><td class="num">${s.id}</td><td class="nowrap">${timeAgo(s.ts)}</td><td>${s.platform === "youtube" ? "YouTube" : "Redes (web)"}</td>
+      <td class="title">${esc(s.platform === "youtube" ? `${s.params.region} · ${s.params.language} · ${s.params.days}d · ${s.params.keywords.join(", ")}` : `${s.params.market} · ${s.params.platforms.join(", ")}${s.params.focus ? ` · ${s.params.focus}` : ""}`)}</td></tr>`).join("")
+  }</tbody></table></div>` : `<div class="empty">Nenhuma varredura ainda.</div>`;
+  $$("#scan-history tr[data-scan]").forEach((tr) => tr.addEventListener("click", async () => renderScan(await api(`/api/trends/${tr.dataset.scan}`))));
+}
+
+function renderScan(scan) {
+  const box = $("#scan-result");
+  box.hidden = false;
+  if (scan.platform === "youtube") {
+    const rows = scan.results || scan.keywords;
+    const p = scan.params;
+    const max = Math.max(100, ...rows.map((r) => r.opportunity));
+    box.innerHTML = `<h2>YouTube · ${esc(p.region)} · ${esc(p.language)} · últimos ${p.days} dias ${scan.quota_cost_estimate ? `<span class="muted small">~${scan.quota_cost_estimate} unidades de cota</span>` : ""}</h2>
+      <p class="muted small">Oportunidade (0–100) = demanda (views/dia) + vídeos outlier de canais pequenos + espaço para canais pequenos + baixa concentração. Heurística para comparar temas entre si.</p>
+      <div class="hbars">${rows.map((r) => `<div class="hbar" data-kw="${esc(r.keyword)}"><span class="hb-label" title="${esc(r.keyword)}">${esc(r.keyword)}</span>
+        <span class="hb-track"><span class="hb-fill" style="width:${Math.max(1, (r.opportunity / max) * 100)}%"></span></span><span class="hb-value">${r.opportunity}</span></div>`).join("")}</div>
+      <div class="table-wrap" style="margin-top:16px"><table><thead><tr><th>Palavra-chave</th><th class="num">Views/dia (mediana)</th><th class="num">Outliers</th><th class="num">Canais pequenos</th><th class="num">Canais distintos</th><th class="num">Maior canal</th><th class="num">Shorts</th></tr></thead><tbody>${
+        rows.map((r) => `<tr class="static"><td>${esc(r.keyword)}</td><td class="num">${fmt(r.median_views_per_day)}</td><td class="num">${r.outlier_videos ?? 0}/${r.videos}</td>
+          <td class="num">${Math.round((r.small_channel_share || 0) * 100)}%</td><td class="num">${r.distinct_channels ?? 0}</td><td class="num">${Math.round((r.top_channel_share || 0) * 100)}%</td><td class="num">${Math.round((r.shorts_share || 0) * 100)}%</td></tr>`).join("")
+      }</tbody></table></div>
+      <h3>Outliers: canais pequenos com vídeo explodindo</h3>
+      <div class="outliers">${rows.flatMap((r) => r.top_outliers.slice(0, 2).map((v) => ({ ...v, kw: r.keyword }))).sort((a, b) => b.outlier - a.outlier).slice(0, 12).map((v) => `
+        <a class="outlier" href="${esc(v.url)}" target="_blank" rel="noopener">
+          ${v.thumbnail ? `<img src="${esc(v.thumbnail)}" alt="" loading="lazy">` : ""}
+          <span class="o-title">${esc(v.title)}</span>
+          <span class="muted small">${esc(v.channel)} · ${fmt(v.subscribers)} inscritos</span>
+          <span class="small"><strong>${fmt(v.views)}</strong> views · ${fmt(v.views_per_day)}/dia · <strong>${v.outlier}×</strong> · ${v.is_short ? "Short" : "longo"} · <span class="muted">${esc(v.kw)}</span></span>
+        </a>`).join("") || `<div class="empty">Nenhum outlier neste recorte.</div>`}</div>`;
+    $$(".hbar", box).forEach((row) => {
+      const r = rows.find((x) => x.keyword === row.dataset.kw);
+      row.addEventListener("mouseenter", (e) => showTip(e, `<strong>${esc(r.keyword)}</strong><br>Oportunidade ${r.opportunity}<br>${fmt(r.median_views_per_day)} views/dia (mediana)<br>${r.outlier_videos} outliers de ${r.videos} vídeos`));
+      row.addEventListener("mousemove", moveTip);
+      row.addEventListener("mouseleave", hideTip);
+    });
+  } else {
+    const data = scan.results || scan;
+    const conf = { alta: "published", "média": "scheduled", media: "scheduled", baixa: "rendered" };
+    box.innerHTML = `<h2>Redes · ${esc(scan.params.market)} · ${esc(scan.params.platforms.join(", "))}</h2>
+      <p>${esc(data.summary)}</p>
+      <div class="trend-grid">${data.trends.map((t) => `<div class="trend ${t.dark_fit ? "" : "dim"}">
+        <div class="actions"><span class="badge kind">${esc(t.platform)}</span><span class="badge ${conf[t.confidence] || "kind"}">confiança ${esc(t.confidence)}</span>${t.dark_fit ? '<span class="badge failed">dark</span>' : ""}</div>
+        <strong>${esc(t.topic)}</strong><span class="muted small">Formato: ${esc(t.format)}</span><span class="small">${esc(t.evidence)}</span>
+        ${t.source_url ? `<a class="small" href="${esc(t.source_url)}" target="_blank" rel="noopener">fonte ↗</a>` : ""}</div>`).join("")}</div>`;
+  }
+  box.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+$("#form-scan-yt").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const f = e.target;
+  const keywords = f.elements.keywords.value.split("\n").map((k) => k.trim()).filter(Boolean);
+  busy(e.submitter, async () => {
+    toast(`Varrendo ${keywords.length} palavra(s)-chave no YouTube…`);
+    const r = await api("/api/trends/youtube", { method: "POST", json: { keywords, region: f.elements.region.value, language: f.elements.language.value, days: +f.elements.days.value } });
+    renderScan(r); loadTrends();
+  });
+});
+$("#form-scan-social").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const f = e.target;
+  const platforms = $$("input[name=p]:checked", f).map((c) => c.value);
+  busy(e.submitter, async () => {
+    toast("Pesquisando nas redes… pode levar alguns minutos.");
+    const r = await api("/api/trends/social", { method: "POST", json: { platforms, focus: f.elements.focus.value, market: f.elements.market.value } });
+    renderScan(r); loadTrends();
   });
 });
 

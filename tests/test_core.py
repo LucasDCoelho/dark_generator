@@ -337,3 +337,101 @@ def test_youtube_upload_body(monkeypatch, tmp_path):
     assert body["status"]["privacyStatus"] == "private" and body["status"]["publishAt"].endswith("Z")
     assert len(body["snippet"]["title"]) == 100 and "<" not in body["snippet"]["description"]
     assert body["snippet"]["defaultAudioLanguage"] == "en-US"
+
+
+# ---------------------------------------------------------------- tendências
+
+class _Exec:
+    def __init__(self, data):
+        self.data = data
+
+    def execute(self):
+        return self.data
+
+
+def _fake_youtube(now):
+    pub = (now - timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    vids = {
+        "v1": ("small", 2_000, 120_000, "PT58S"),   # canal pequeno explodindo -> outlier
+        "v2": ("big", 5_000_000, 300_000, "PT12M"),  # canal grande
+        "v3": ("small", 2_000, 900, "PT40S"),
+    }
+
+    class Search:
+        def list(self, **kw):
+            assert kw["order"] == "viewCount" and kw["regionCode"] == "BR"
+            ids = ["v1", "v2", "v3"] if kw["q"] == "mistério" else ["v2"]
+            return _Exec({"items": [{"id": {"videoId": i}} for i in ids]})
+
+    class Videos:
+        def list(self, **kw):
+            return _Exec({"items": [{
+                "id": i, "snippet": {"title": f"T{i}", "channelId": vids[i][0], "channelTitle": vids[i][0],
+                                      "publishedAt": pub, "thumbnails": {}},
+                "statistics": {"viewCount": str(vids[i][2])}, "contentDetails": {"duration": vids[i][3]},
+            } for i in kw["id"].split(",")]})
+
+    class Channels:
+        def list(self, **kw):
+            subs = {"small": 2_000, "big": 5_000_000}
+            return _Exec({"items": [{"id": c, "statistics": {"subscriberCount": str(subs[c])}} for c in kw["id"].split(",")]})
+
+    return SimpleNamespace(search=lambda: Search(), videos=lambda: Videos(), channels=lambda: Channels())
+
+
+def test_scan_youtube_scores_outliers(monkeypatch):
+    from darkgen import trends
+
+    monkeypatch.setattr(trends, "_youtube_client", lambda: _fake_youtube(datetime.now(timezone.utc)))
+    r = trends.scan_youtube(["mistério", "backrooms"], region="BR", language="pt", days=7)
+    by_kw = {k["keyword"]: k for k in r["keywords"]}
+    m = by_kw["mistério"]
+    assert m["outlier_videos"] == 1 and m["top_outliers"][0]["id"] == "v1"
+    assert m["top_outliers"][0]["is_short"] is True
+    assert m["opportunity"] > by_kw["backrooms"]["opportunity"]  # só canal grande = menos oportunidade
+    assert r["keywords"][0]["keyword"] == "mistério"  # ordenado por oportunidade
+    saved = trends.get_scan(r["scan_id"])
+    assert saved["params"]["keywords"] == ["mistério", "backrooms"]
+
+    r2 = trends.scan_youtube(["mistério", "backrooms"], region="BR", language="pt", days=7)
+    diff = trends.compare_scans(r["scan_id"], r2["scan_id"])
+    assert {d["keyword"] for d in diff} == {"mistério", "backrooms"} and all(d["delta_opportunity"] == 0 for d in diff)
+    with pytest.raises(ValueError):
+        trends.scan_youtube([" "])
+
+
+def test_iso_duration():
+    from darkgen.trends import _iso_duration_seconds
+
+    assert _iso_duration_seconds("PT1M5S") == 65
+    assert _iso_duration_seconds("PT1H2M") == 3720
+    assert _iso_duration_seconds("P1DT1S") == 86401
+    assert _iso_duration_seconds("") == 0
+
+
+def test_scan_social_structures_research(monkeypatch):
+    from darkgen import trends
+    from darkgen.content import writer
+
+    class FakeMessages:
+        def create(self, **kw):
+            assert kw["tools"][0]["type"].startswith("web_search")
+            return SimpleNamespace(stop_reason="end_turn", content=[SimpleNamespace(type="text", text="notas")])
+
+        def parse(self, **kw):
+            out = trends.SocialTrendList(summary="ok", trends=[trends.SocialTrend(
+                platform="kwai", topic="mininovelas de suspense", format="série vertical", evidence="100 bi views",
+                source_url="https://x", dark_fit=True, confidence="alta")])
+            return SimpleNamespace(stop_reason="end_turn", parsed_output=out)
+
+    monkeypatch.setattr(writer, "_client", lambda: SimpleNamespace(beta=SimpleNamespace(messages=FakeMessages())))
+    r = trends.scan_social(["kwai"], focus="terror")
+    assert r["trends"][0]["platform"] == "kwai" and trends.get_scan(r["scan_id"])["results"]["summary"] == "ok"
+
+
+def test_new_presets_are_valid():
+    from darkgen import service
+
+    for p in service.list_presets():
+        ch = service.create_channel(f"Teste {p['key']}", preset=p["key"])
+        assert ch["settings"]["niche"]

@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
-from . import db, pipeline, service
+from . import db, pipeline, service, trends
 from .content.writer import script_shape
 from .scheduling import best_times as bt
 
@@ -30,6 +30,9 @@ no YouTube e conecta aqui.
 Produzir: script_guidelines → list_recent_topics → create_video com o roteiro em `scenes` (ou só tema,
 se o servidor tiver Claude API) → o worker renderiza e agenda no melhor horário do canal.
 Manutenção: channel_health (sem channel_id = todos) mostra problemas e a ação sugerida para cada um.
+Tendências: scan_youtube_trends (dados reais do YouTube: views/dia e outliers de canais pequenos) e
+scan_social_trends (TikTok/Kwai/Instagram via pesquisa na web) ajudam a escolher nichos antes de criar
+canais; os resultados ficam salvos (list_trend_scans / compare_trend_scans).
 Horários sem fuso são interpretados no fuso do público do canal."""
 
 mcp = MCPServer("dark-generator", instructions=INSTRUCTIONS)
@@ -350,6 +353,55 @@ def activity_log(channel_id: int | None = None, limit: int = 30, only_errors: bo
 def cleanup_files(channel_id: int | None = None, older_than_days: int = 7) -> dict:
     """Libera disco apagando os arquivos locais de vídeos já publicados há mais de N dias."""
     return {"cleaned": pipeline.cleanup_files(channel_id, older_than_days)}
+
+
+# ================================================================ tendências
+
+@tool()
+def scan_youtube_trends(
+    keywords: list[str] | None = None,
+    region: str = "BR",
+    language: str = "pt",
+    days: int = 14,
+    per_keyword: int = 25,
+) -> dict:
+    """Mede a demanda real no YouTube por tema: vídeos mais vistos dos últimos `days` dias para cada
+    palavra-chave, com views/dia, outliers (canal pequeno com views >= 3x inscritos), concentração e uma
+    nota de oportunidade 0-100. Sem keywords usa uma lista dark padrão do idioma.
+    CUSTO: ~100 unidades de cota da API por palavra-chave (use YOUTUBE_API_KEY de outro projeto)."""
+    return trends.scan_youtube(keywords, region=region, language=language, days=days, per_keyword=per_keyword)
+
+
+@tool()
+def scan_social_trends(
+    platforms: list[str] | None = None,
+    focus: str = "",
+    market: str = "Brasil",
+) -> dict:
+    """Varre a web (via Claude + busca) atrás de temas e formatos sem rosto em alta no TikTok, Kwai,
+    Instagram e YouTube, com evidência, link e confiança. Essas redes não têm API pública de tendências,
+    então é pesquisa qualitativa. Requer ANTHROPIC_API_KEY no servidor. Leva 1-3 minutos."""
+    if not pipeline.has_claude():
+        raise ValueError("Requer ANTHROPIC_API_KEY no servidor. Alternativa: pesquise você mesmo na web.")
+    return trends.scan_social(platforms, focus=focus, market=market)
+
+
+@tool()
+def list_trend_scans(limit: int = 20) -> list[dict]:
+    """Varreduras de tendências já feitas (id, data, plataforma, parâmetros)."""
+    return trends.list_scans(limit)
+
+
+@tool()
+def get_trend_scan(scan_id: int) -> dict:
+    """Resultado completo de uma varredura de tendências."""
+    return trends.get_scan(scan_id)
+
+
+@tool()
+def compare_trend_scans(scan_a: int, scan_b: int) -> list[dict]:
+    """Compara duas varreduras do YouTube (antiga → nova): quais temas ganharam ou perderam oportunidade."""
+    return trends.compare_scans(scan_a, scan_b)
 
 
 def run_stdio() -> None:

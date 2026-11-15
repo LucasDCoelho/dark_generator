@@ -23,6 +23,9 @@ class EnvSettings(BaseSettings):
     public_base_url: str = ""  # ex.: https://meu-servidor.com (callback OAuth e links do MCP)
     # Uploads por dia por projeto do Google Cloud (a cota é por projeto, não por canal).
     youtube_uploads_per_project_per_day: int = 6
+    # Chave simples da YouTube Data API para o scanner de tendências (de preferência de outro projeto,
+    # para não gastar a cota de uploads). Sem ela, usa o OAuth de um canal conectado.
+    youtube_api_key: str = ""
 
     @property
     def db_path(self) -> Path:
@@ -149,7 +152,8 @@ def lang_text(language: str) -> dict:
 NICHE_PRESETS: dict[str, dict] = {
     "casos_reais_br": {
         "label": "Casos reais (BR)",
-        "description": "Crimes e investigações reais, foco no mistério e na investigação, sem sensacionalismo.",
+        "description": "Crimes e investigações reais. Demanda alta, mas nicho saturado e mais sensível para "
+                       "anunciantes: diferencie com casos brasileiros pouco conhecidos.",
         "settings": {
             "niche": "casos criminais reais e investigações famosas e pouco conhecidas, do Brasil e do mundo, "
                      "contados com respeito às vítimas e foco no mistério e na investigação",
@@ -178,10 +182,12 @@ NICHE_PRESETS: dict[str, dict] = {
         },
     },
     "contos_terror": {
-        "label": "Contos de terror (ficção)",
-        "description": "Histórias originais de terror narradas, estilo creepypasta. 100% ficção.",
+        "label": "Contos de terror em série (ficção)",
+        "description": "Terror original narrado em capítulos com cliffhanger — o formato que mais prende no "
+                       "TikTok/Kwai/Shorts. 100% ficção, baixo risco para anúncios.",
         "settings": {
-            "niche": "contos de terror originais narrados (creepypasta), sempre apresentados como ficção",
+            "niche": "contos de terror originais narrados (creepypasta), sempre apresentados como ficção, "
+                     "de preferência em capítulos curtos com gancho no fim para o próximo episódio",
             "content_mix": ["creepypasta", "conto_de_terror"],
             "default_tags": ["creepypasta", "terror", "contos de terror", "histórias de terror", "medo"],
             "research_with_web": False,
@@ -217,6 +223,62 @@ NICHE_PRESETS: dict[str, dict] = {
             "niche": "o lado assustador e desconhecido do oceano profundo e do universo, com fatos científicos reais",
             "content_mix": ["oceano_profundo", "espaco", "criatura_real"],
             "default_tags": ["oceano", "espaço", "universo", "medo do desconhecido", "ciência"],
+        },
+    },
+    "historia_nao_contada": {
+        "label": "História que não te contaram",
+        "description": "Mistérios e fatos sombrios da história com o ângulo 'isso não te ensinaram na escola' — "
+                       "apontado como subestimado no Instagram e forte em longos.",
+        "settings": {
+            "niche": "fatos sombrios e mistérios da história que não aparecem nos livros escolares: eventos "
+                     "esquecidos, decisões perturbadoras, segredos revelados por documentos e arqueologia",
+            "content_mix": ["historia_sombria", "misterio", "fato_esquecido", "arqueologia"],
+            "default_tags": ["história", "não te contaram", "mistérios", "fatos históricos", "história sombria"],
+        },
+    },
+    "sobreviventes": {
+        "label": "Sobreviventes e desastres reais",
+        "description": "Histórias reais de sobrevivência (mar, montanha, aviação, desastres) com começo, meio "
+                       "e fim — pouca saturação, alta retenção. Tratar tragédias com respeito.",
+        "settings": {
+            "niche": "histórias reais de sobrevivência extrema e desastres: naufrágios, acidentes aéreos, "
+                     "pessoas perdidas em montanhas, selvas e no mar, contadas com respeito às vítimas e foco "
+                     "nas decisões que salvaram vidas",
+            "content_mix": ["sobrevivencia", "naufragio", "desastre_aereo", "perdido_na_natureza"],
+            "default_tags": ["sobrevivência", "história real", "desastres", "naufrágio", "sobreviventes"],
+            "style": "narrador documental tenso, minuto a minuto, foco nas decisões e no que deu errado",
+        },
+    },
+    "psicologia_sombria": {
+        "label": "Psicologia do comportamento humano",
+        "description": "Por que as pessoas fazem coisas perturbadoras: experimentos famosos, vieses, "
+                       "manipulação (educativo). Alta taxa de salvamento no Instagram.",
+        "settings": {
+            "niche": "psicologia e comportamento humano em seu lado sombrio, de forma educativa: experimentos "
+                     "famosos, vieses cognitivos, efeito de grupo, manipulação e como se proteger dela",
+            "content_mix": ["experimento", "vies_cognitivo", "comportamento", "manipulacao_explicada"],
+            "default_tags": ["psicologia", "comportamento humano", "mente", "experimentos", "curiosidades"],
+            "research_with_web": True,
+            "style": "narrador curioso e direto, explica com exemplos do dia a dia, termina com uma reflexão",
+        },
+    },
+    "liminal_en": {
+        "label": "Liminal spaces / Backrooms (EN)",
+        "description": "Ficção liminar, Backrooms e analog horror em inglês — interesse em alta após o filme "
+                       "da A24 (mai/2026). Lore original, nunca copiar séries existentes.",
+        "settings": {
+            "language": "en-US",
+            "timezone": "America/New_York",
+            "voice": "en-US-GuyNeural",
+            "voice_rate": "-8%",
+            "voice_pitch": "-3Hz",
+            "niche": "original liminal-space fiction: empty places that feel wrong, original Backrooms-style "
+                     "levels and entities, analog-horror style logs and found documents — always original lore",
+            "style": "calm, unsettling narrator reading logs and reports, long pauses, understated dread",
+            "content_mix": ["liminal_space", "original_level", "found_log", "entity_report"],
+            "default_tags": ["liminal spaces", "backrooms", "analog horror", "creepy", "horror story"],
+            "research_with_web": False,
+            "subtitle_color": "#E8D44D",
         },
     },
     "unsolved_en": {
