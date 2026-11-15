@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dark Generator</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='14' fill='%23111'/><circle cx='16' cy='16' r='6' fill='%23d4213d'/></svg>">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="brand"><span class="dot"></span>Dark Generator</div>
+    <nav>
+      <a href="#overview" data-page="overview">Visão geral</a>
+      <a href="#videos" data-page="videos">Vídeos</a>
+      <a href="#new" data-page="new">Criar vídeo</a>
+      <a href="#times" data-page="times">Horários</a>
+      <a href="#analytics" data-page="analytics">Desempenho</a>
+      <a href="#config" data-page="config">Configurações</a>
+    </nav>
+    <div class="side-status" id="side-status"></div>
+  </aside>
+
+  <main id="main">
+    <!-- VISÃO GERAL -->
+    <section class="page" id="page-overview">
+      <header class="page-head">
+        <div>
+          <h1 id="ch-title">Visão geral</h1>
+          <p class="muted" id="ch-sub">Status do canal e da produção</p>
+        </div>
+        <div class="actions">
+          <button class="btn" id="btn-refresh-stats">Atualizar estatísticas</button>
+          <button class="btn primary" id="btn-plan">Planejar agenda agora</button>
+        </div>
+      </header>
+      <div class="chips" id="status-chips"></div>
+      <div class="tiles" id="kpis"></div>
+      <div class="grid-2">
+        <div class="card">
+          <h2>Próximas publicações</h2>
+          <div id="upcoming"></div>
+        </div>
+        <div class="card">
+          <h2>Atividade</h2>
+          <ul class="feed" id="feed"></ul>
+        </div>
+      </div>
+      <div class="card" id="approval-card" hidden>
+        <h2>Aguardando sua aprovação</h2>
+        <div id="approval"></div>
+      </div>
+    </section>
+
+    <!-- VÍDEOS -->
+    <section class="page" id="page-videos" hidden>
+      <header class="page-head">
+        <div><h1>Vídeos</h1><p class="muted">Fila de produção, agendados e publicados</p></div>
+        <div class="actions">
+          <select id="flt-kind" aria-label="Tipo">
+            <option value="">Todos os tipos</option><option value="short">Shorts</option><option value="long">Longos</option>
+          </select>
+        </div>
+      </header>
+      <div class="chips filter" id="flt-status"></div>
+      <div class="card flush"><div id="videos-table"></div></div>
+    </section>
+
+    <!-- CRIAR -->
+    <section class="page" id="page-new" hidden>
+      <header class="page-head"><div><h1>Criar vídeo</h1><p class="muted">Automático (Claude escreve) ou com roteiro pronto</p></div></header>
+      <div class="tabs" role="tablist">
+        <button class="tab active" data-tab="auto">Automático</button>
+        <button class="tab" data-tab="manual">Roteiro pronto</button>
+      </div>
+
+      <div class="card tab-panel" id="tab-auto">
+        <form id="form-auto" class="form">
+          <div class="row">
+            <label>Formato
+              <select name="kind"><option value="short">Short (vertical, ~50s)</option><option value="long">Longo (horizontal)</option></select>
+            </label>
+            <label>Publicar em <span class="muted">(vazio = melhor horário livre)</span>
+              <input type="datetime-local" name="scheduled_at">
+            </label>
+          </div>
+          <label>Tema <span class="muted">(vazio = Claude escolhe)</span>
+            <input name="topic" placeholder="Ex.: O caso do Incidente do Passo Dyatlov">
+          </label>
+          <label class="check"><input type="checkbox" name="is_fiction"> É ficção / lenda</label>
+          <div class="actions">
+            <button type="button" class="btn" id="btn-ideas">Sugerir ideias</button>
+            <button class="btn primary">Colocar na fila</button>
+          </div>
+        </form>
+        <div id="ideas"></div>
+      </div>
+
+      <div class="card tab-panel" id="tab-manual" hidden>
+        <form id="form-manual" class="form">
+          <div class="row">
+            <label>Formato
+              <select name="kind"><option value="short">Short</option><option value="long">Longo</option></select>
+            </label>
+            <label>Publicar em <span class="muted">(vazio = melhor horário)</span>
+              <input type="datetime-local" name="scheduled_at">
+            </label>
+          </div>
+          <label>Título <input name="title" maxlength="100" required></label>
+          <label>Descrição <textarea name="description" rows="4"></textarea></label>
+          <div class="row">
+            <label>Tags <span class="muted">(separadas por vírgula)</span><input name="tags"></label>
+            <label>Texto da thumbnail <input name="thumbnail_text" maxlength="40"></label>
+          </div>
+          <label class="check"><input type="checkbox" name="is_fiction"> É ficção / lenda</label>
+          <h3>Cenas</h3>
+          <div id="scenes"></div>
+          <div class="actions">
+            <button type="button" class="btn" id="btn-add-scene">+ Cena</button>
+            <span class="muted" id="word-count"></span>
+            <button class="btn primary">Criar e renderizar</button>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <!-- HORÁRIOS -->
+    <section class="page" id="page-times" hidden>
+      <header class="page-head">
+        <div><h1>Melhores horários</h1><p class="muted" id="times-sub"></p></div>
+        <div class="seg" id="times-kind">
+          <button data-kind="short" class="active">Shorts</button><button data-kind="long">Longos</button>
+        </div>
+      </header>
+      <div class="card">
+        <h2>Potencial por dia e hora <span class="muted small">(fuso do canal)</span></h2>
+        <div id="heatmap" class="heatmap-wrap"></div>
+        <div class="legend-scale" id="heat-legend"></div>
+      </div>
+      <div class="card">
+        <h2>Próximos horários livres sugeridos</h2>
+        <ul class="slots" id="next-slots"></ul>
+      </div>
+    </section>
+
+    <!-- DESEMPENHO -->
+    <section class="page" id="page-analytics" hidden>
+      <header class="page-head">
+        <div><h1>Desempenho</h1><p class="muted">Dados dos vídeos publicados por este sistema</p></div>
+        <div class="seg" id="perf-kind">
+          <button data-kind="short" class="active">Shorts</button><button data-kind="long">Longos</button>
+        </div>
+      </header>
+      <div class="tiles" id="perf-tiles"></div>
+      <div class="card">
+        <h2>Média de views por hora de publicação</h2>
+        <div id="perf-chart" class="chart"></div>
+      </div>
+      <div class="card flush">
+        <h2 class="pad">Top 10 vídeos</h2>
+        <div id="top-table"></div>
+      </div>
+    </section>
+
+    <!-- CONFIGURAÇÕES -->
+    <section class="page" id="page-config" hidden>
+      <header class="page-head"><div><h1>Configurações</h1><p class="muted">Conexões, agenda e estilo do canal</p></div></header>
+      <div class="grid-2">
+        <div class="card">
+          <h2>YouTube</h2>
+          <div id="yt-box"></div>
+        </div>
+        <div class="card">
+          <h2>Serviços</h2>
+          <div id="env-box"></div>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Produção e agenda</h2>
+        <form id="form-settings" class="form">
+          <div class="row three">
+            <label>Shorts por dia <input type="number" name="shorts_per_day" min="0" max="6"></label>
+            <label>Longos por dia <input type="number" name="long_per_day" min="0" max="3"></label>
+            <label>Intervalo mínimo (h) <input type="number" name="min_gap_hours" min="1" max="12"></label>
+          </div>
+          <div class="row three">
+            <label>Planejar dias à frente <input type="number" name="plan_days_ahead" min="0" max="7"></label>
+            <label>Duração do longo (min) <input type="number" name="long_target_minutes" min="3" max="20"></label>
+            <label>Volume da trilha <input type="number" name="music_volume" min="0" max="1" step="0.01"></label>
+          </div>
+          <label class="check"><input type="checkbox" name="autopilot"> Piloto automático (gera e agenda todo dia)</label>
+          <label class="check"><input type="checkbox" name="approval_required"> Exigir minha aprovação antes do upload</label>
+          <label class="check"><input type="checkbox" name="research_with_web"> Pesquisar na web antes de escrever casos reais</label>
+          <label class="check"><input type="checkbox" name="synthetic_media_disclosure"> Marcar como "conteúdo alterado ou sintético" no YouTube</label>
+          <label>Nicho / linha editorial <textarea name="niche" rows="3"></textarea></label>
+          <div class="row three">
+            <label>Voz (edge-tts) <input name="voice"></label>
+            <label>Velocidade <input name="voice_rate"></label>
+            <label>Tom <input name="voice_pitch"></label>
+          </div>
+          <div class="row">
+            <label>Tags padrão <span class="muted">(vírgula)</span><input name="default_tags"></label>
+            <label>Categorias de conteúdo <span class="muted">(vírgula)</span><input name="content_mix"></label>
+          </div>
+          <div class="actions"><button class="btn primary">Salvar</button></div>
+        </form>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="modal"><div id="modal-body"></div></dialog>
+  <div id="tooltip" role="tooltip" hidden></div>
+  <div id="toast" hidden></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

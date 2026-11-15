@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "dark-generator": {
+      "command": ".venv/bin/python",
+      "args": ["-m", "darkgen", "mcp"]
+    }
+  }
+}

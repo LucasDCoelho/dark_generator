@@ -1,0 +1,11 @@
+anthropic>=2.8,<3
+mcp>=2.3,<3
+fastapi>=0.163
+uvicorn[standard]>=0.30
+edge-tts>=7.3
+google-api-python-client>=2.200
+google-auth-oauthlib>=1.2
+apscheduler>=3.11,<4
+pydantic>=2.10
+pydantic-settings>=2.6
+httpx>=0.28
